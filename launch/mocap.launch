@@ -1,0 +1,3 @@
+<launch>
+	<node name="mocap_streamer" pkg="phasespace" type="mocap_streamer.py" cwd="node" />
+</launch>

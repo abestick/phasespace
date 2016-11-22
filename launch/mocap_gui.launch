@@ -1,0 +1,4 @@
+<launch>
+	<include file="$(find phasespace)/launch/mocap.launch" />
+	<node name="rviz" pkg="rviz" type="rviz" args="-d $(find phasespace)/resources/mocap.rviz" />
+</launch>
