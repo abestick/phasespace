@@ -9,7 +9,8 @@ import std_msgs.msg as std_msgs
 import json
 import numpy as np
 import numpy.linalg as la
-import load_mocap
+import scipy.linalg as spla
+import scipy.optimize as opt
 
 #NOT YET WORKING
 BASE_MARKERS = ['back', 'chest']
@@ -58,6 +59,44 @@ class MocapFramePublisher():
 
                 #Publish the transform
                 self.publish_transform(translation, rotation)
+
+        self._frame_num += 1
+
+    def publish_transform(self, translation, rotation):
+        self._br.sendTransform(translation,
+                         rotation,
+                         rospy.Time.now(),
+                         '/human',
+                         '/mocap')
+
+
+class MocapFrameCalibrator():
+    def __init__(self, base_markers, skip_frames=3):
+        self._base_markers = base_markers
+        self._skip_frames = skip_frames
+        self._br = tf.TransformBroadcaster()
+        self._sub = rospy.Subscriber('/mocap_point_cloud', 
+                                     sensor_msgs.PointCloud, 
+                                     self._new_frame_callback)
+
+    def _new_frame_callback(self, message):
+        print('call')
+        if self._frame_num % self._skip_frames == 0:
+            data = point_cloud_to_array(message)[self._base_markers,:,0]            
+
+            #Remove markers which are not visible
+            visible = np.where(np.logical_not(np.isnan(data[:,0])))[0]
+            data = data[visible, :]
+
+            #Compute the centroid of the observed points
+            centroid = np.mean(data, axis=0)
+
+            #Compute the translation and rotation components
+            translation = centroid.squeeze()
+            rotation = convert.quaternion_from_matrix(convert.identity_matrix())
+
+            #Publish the transform
+            self.publish_transform(translation, rotation)
 
         self._frame_num += 1
 
@@ -155,18 +194,24 @@ def vec_to_rot(x):
 def main():
     rospy.init_node('human_frame_publisher')
 
+    #Publish frame --------------------------------
     #Read the desired coordinates from a file
-    assignments = None
-    with open(PREFIX + ASSIGNMENTS, 'r') as ass_file:
-        assignments = json.load(ass_file)['assignments']
+    # assignments = None
+    # with open(PREFIX + ASSIGNMENTS, 'r') as ass_file:
+    #     assignments = json.load(ass_file)['assignments']
 
-    base_indices = []
-    for group in BASE_MARKERS:
-        base_indices.extend(assignments[group])
+    # base_indices = []
+    # for group in BASE_MARKERS:
+    #     base_indices.extend(assignments[group])
 
-    desired = np.load(PREFIX+NPZ)['base_config']
+    # desired = np.load(PREFIX+NPZ)['base_config']
 
-    frame_publisher = MocapFramePublisher(base_indices, desired)
+    # frame_publisher = MocapFramePublisher(base_indices, desired)
+    # rospy.spin()
+
+    #Calibrate frame -----------------------------------
+    frame_calibrator = MocapFrameCalibrator([0,1,2,3])
+
     rospy.spin()
 
 if __name__ == '__main__':
