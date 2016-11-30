@@ -72,6 +72,7 @@ class MocapFramePublisher():
 
 class MocapFrameCalibrator():
     def __init__(self, base_markers, skip_frames=3):
+        self._frame_num = 0
         self._base_markers = base_markers
         self._skip_frames = skip_frames
         self._br = tf.TransformBroadcaster()
@@ -97,6 +98,15 @@ class MocapFrameCalibrator():
 
             #Publish the transform
             self.publish_transform(translation, rotation)
+
+            #Compute the transformation matrix
+            homog = convert.identity_matrix()
+            homog[0:3,3] = translation
+
+            #Transform points into rigid body frame
+            homog_data = np.vstack((data.T, np.ones((1, data.shape[0]))))
+            desired = la.inv(homog).dot(homog_data)
+            print(desired)
 
         self._frame_num += 1
 
@@ -210,7 +220,7 @@ def main():
     # rospy.spin()
 
     #Calibrate frame -----------------------------------
-    frame_calibrator = MocapFrameCalibrator([0,1,2,3])
+    frame_calibrator = MocapFrameCalibrator([0,1,2,3,4,5])
 
     rospy.spin()
 
