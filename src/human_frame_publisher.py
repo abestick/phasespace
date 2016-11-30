@@ -11,6 +11,9 @@ import numpy as np
 import numpy.linalg as la
 import scipy.linalg as spla
 import scipy.optimize as opt
+import scipy as sp
+import sys
+import pprint
 
 #NOT YET WORKING
 BASE_MARKERS = ['back', 'chest']
@@ -47,7 +50,7 @@ class MocapFramePublisher():
 
             if len(visible) >= 3:
                 #Compute the current transform
-                homog, rot = load_mocap.find_homog_trans(data, desired, rot_0=self._last_rot)
+                homog, rot = find_homog_trans(data, desired, rot_0=self._last_rot)
                 self._last_rot = rot
                 homog = la.inv(homog)
                 print(homog)
@@ -71,7 +74,7 @@ class MocapFramePublisher():
 
 
 class MocapFrameCalibrator():
-    def __init__(self, base_markers, skip_frames=3):
+    def __init__(self, base_markers, skip_frames=0):
         self._frame_num = 0
         self._base_markers = base_markers
         self._skip_frames = skip_frames
@@ -108,6 +111,14 @@ class MocapFrameCalibrator():
             desired = la.inv(homog).dot(homog_data)
             print(desired)
 
+            #Save the marker arrangement if all markers are visible
+            if desired.shape[1] == len(self._base_markers):
+                try:
+                    save_rigid_body_config('test_file.txt', 'test_body', self._base_markers, desired[0:3,:])
+                except IOError:
+                    print('Error: Unable to save rigid body config')
+                rospy.signal_shutdown('Captured all markers in a single frame') 
+
         self._frame_num += 1
 
     def publish_transform(self, translation, rotation):
@@ -124,38 +135,42 @@ def point_cloud_to_array(message):
         data[i,:,0] = [point.x, point.y, point.z]
     return data
 
-def find_homog_trans(points_a, points_b, err_threshold=0, rot_0=None):
+def find_homog_trans(points_a, points_b, err_threshold=0, rot_0=None, alg='svd'):
     """Finds a homogeneous transformation matrix that, when applied to 
     the points in points_a, minimizes the squared Euclidean distance 
     between the transformed points and the corresponding points in 
     points_b. Both points_a and points_b are (n, 3) arrays.
     """
     #OLD ALGORITHM ----------------------
-    #Align the centroids of the two point clouds
-    cent_a = sp.average(points_a, axis=0)
-    cent_b = sp.average(points_b, axis=0)
-    points_a = points_a - cent_a
-    points_b = points_b - cent_b
-    
-    #Define the error as a function of a rotation vector in R^3
-    rot_cost = lambda rot: (sp.dot(vec_to_rot(rot), points_a.T).T
-                    - points_b).flatten()**2
-    
-    #Run the optimization
-    if rot_0 == None:
-        rot_0 = sp.zeros(3)
-    rot = opt.leastsq(rot_cost, rot_0)[0]
-    
-    #Compute the final homogeneous transformation matrix
-    homog_1 = sp.eye(4)
-    homog_1[0:3, 3] = -cent_a
-    homog_2 = sp.eye(4)
-    homog_2[0:3,0:3] = vec_to_rot(rot)
-    homog_3 = sp.eye(4)
-    homog_3[0:3,3] = cent_b
-    homog = sp.dot(homog_3, sp.dot(homog_2, homog_1))
-    return homog, rot
+    if alg == 'opt':
+        #Align the centroids of the two point clouds
+        cent_a = sp.average(points_a, axis=0)
+        cent_b = sp.average(points_b, axis=0)
+        points_a = points_a - cent_a
+        points_b = points_b - cent_b
+        
+        #Define the error as a function of a rotation vector in R^3
+        rot_cost = lambda rot: (sp.dot(vec_to_rot(rot), points_a.T).T
+                        - points_b).flatten()**2
+        
+        #Run the optimization
+        if rot_0 == None:
+            rot_0 = sp.zeros(3)
+        rot = opt.leastsq(rot_cost, rot_0)[0]
+        
+        #Compute the final homogeneous transformation matrix
+        homog_1 = sp.eye(4)
+        homog_1[0:3, 3] = -cent_a
+        homog_2 = sp.eye(4)
+        homog_2[0:3,0:3] = vec_to_rot(rot)
+        homog_3 = sp.eye(4)
+        homog_3[0:3,3] = cent_b
+        homog = sp.dot(homog_3, sp.dot(homog_2, homog_1))
+        return homog, rot
     #---------------------------------------
+    elif alg == 'svd':
+        homog = convert.superimposition_matrix(points_a.T, points_b.T)
+        return homog, None
 
 
     # #Define the error function
@@ -201,6 +216,26 @@ def vec_to_rot(x):
     rot = spla.expm(skew)
     return rot
 
+def save_rigid_body_config(filepath, body_name, marker_indices, desired):
+    try:
+        with open(filepath) as file_handle:
+            data = json.load(file_handle)
+    except IOError:
+        # File doesn't exist yet
+        data = {}
+    object_dict = {'type': 'rigid_body',
+                   'marker_indices': marker_indices,
+                   'desired': desired.tolist()}
+    data[body_name] = object_dict
+    with open(filepath, 'w') as file_handle:
+        json.dump(data, file_handle)
+
+def load_rigid_body_config(filepath, body_name):
+    with open(filepath) as file_handle:
+        data = json.load(file_handle)
+    desired = np.asarray(data[body_name]['desired']).T
+    return data[body_name]['marker_indices'], desired
+
 def main():
     rospy.init_node('human_frame_publisher')
 
@@ -220,7 +255,11 @@ def main():
     # rospy.spin()
 
     #Calibrate frame -----------------------------------
-    frame_calibrator = MocapFrameCalibrator([0,1,2,3,4,5])
+    # frame_calibrator = MocapFrameCalibrator([0,1,2,3,4,5])
+
+    base_indices, desired = load_rigid_body_config('test_file.txt', 'test_body')
+    frame_publisher = MocapFramePublisher(base_indices, desired)
+
 
     rospy.spin()
 
