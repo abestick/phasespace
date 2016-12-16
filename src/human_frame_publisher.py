@@ -18,11 +18,15 @@ import pprint
 #NOT YET WORKING
 BASE_MARKERS = ['back', 'chest']
 
+#rigid_tracker.py data.txt --calibrate
+
+DEFAULT_FILE = 'rigid_bodies.txt'
+
 parser = argparse.ArgumentParser()
-parser.add_argument('data_dir', help='The directory containing the calibration data')
+parser.add_argument('--calibrate', action='store_true')
+parser.add_argument('data_file', help='The file containing the rigid body data', default='DEFAULT_FILE')
 args = parser.parse_args()
 
-PREFIX = args.data_dir + '/'
 ASSIGNMENTS = 'assignments.json'
 NPZ = 'right_arm_skel_fit.npz'
 
@@ -74,7 +78,7 @@ class MocapFramePublisher():
 
 
 class MocapFrameCalibrator():
-    def __init__(self, base_markers, skip_frames=0):
+    def __init__(self, base_markers, skip_frames=1):
         self._frame_num = 0
         self._base_markers = base_markers
         self._skip_frames = skip_frames
@@ -114,7 +118,7 @@ class MocapFrameCalibrator():
             #Save the marker arrangement if all markers are visible
             if desired.shape[1] == len(self._base_markers):
                 try:
-                    save_rigid_body_config('test_file.txt', 'test_body', self._base_markers, desired[0:3,:])
+                    save_rigid_body_config(args.data_file, 'test_body', self._base_markers, desired[0:3,:])
                 except IOError:
                     print('Error: Unable to save rigid body config')
                 rospy.signal_shutdown('Captured all markers in a single frame') 
@@ -254,11 +258,12 @@ def main():
     # frame_publisher = MocapFramePublisher(base_indices, desired)
     # rospy.spin()
 
-    #Calibrate frame -----------------------------------
-    # frame_calibrator = MocapFrameCalibrator([0,1,2,3,4,5])
-
-    base_indices, desired = load_rigid_body_config('test_file.txt', 'test_body')
-    frame_publisher = MocapFramePublisher(base_indices, desired)
+    # Calibrate frame -----------------------------------
+    if args.calibrate:
+        frame_calibrator = MocapFrameCalibrator([0,1,2,3,4,5])
+    else:
+        base_indices, desired = load_rigid_body_config(args.data_file, 'test_body')
+        frame_publisher = MocapFramePublisher(base_indices, desired)
 
 
     rospy.spin()
