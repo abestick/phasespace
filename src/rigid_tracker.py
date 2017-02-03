@@ -15,23 +15,22 @@ import scipy as sp
 import sys
 import pprint
 
-#NOT YET WORKING
-BASE_MARKERS = ['back', 'chest']
+# Sample command to calibrate a rigid with markers 0-4
+# rosrun phasespace rigid_tracker.py data.txt --calibrate 0 1 2 3 4 --frame /hand
 
-#rigid_tracker.py data.txt --calibrate
+# Sample command to track the same rigid and publish the transform as /hand
+# rosrun phasespace rigid_tracker.py data.txt --frame /hand
 
 DEFAULT_FILE = 'rigid_bodies.txt'
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--calibrate', action='store_true')
-parser.add_argument('data_file', help='The file containing the rigid body data', default='DEFAULT_FILE')
+parser.add_argument('data_file', help='The file containing the rigid body data')
+parser.add_argument('--calibrate', nargs='+', type=int)
+parser.add_argument('--frame', default='\human')
 args = parser.parse_args()
 
-ASSIGNMENTS = 'assignments.json'
-NPZ = 'right_arm_skel_fit.npz'
-
 class MocapFramePublisher():
-    def __init__(self, base_markers, desired, skip_frames=3):
+    def __init__(self, base_markers, desired, frame, skip_frames=3):
         self._desired = desired
         self._base_markers = base_markers
         self._frame_num = 0
@@ -41,9 +40,9 @@ class MocapFramePublisher():
         self._sub = rospy.Subscriber('/mocap_point_cloud', 
                                      sensor_msgs.PointCloud, 
                                      self._new_frame_callback)
+        self._frame = frame
 
     def _new_frame_callback(self, message):
-        print('call')
         if self._frame_num % self._skip_frames == 0:
             data = point_cloud_to_array(message)[self._base_markers,:,0]            
 
@@ -58,7 +57,6 @@ class MocapFramePublisher():
                 self._last_rot = rot
                 homog = la.inv(homog)
                 print(homog)
-                print(rot)
 
                 #Compute the translation and rotation components
                 translation = convert.translation_from_matrix(homog)
@@ -73,7 +71,7 @@ class MocapFramePublisher():
         self._br.sendTransform(translation,
                          rotation,
                          rospy.Time.now(),
-                         '/human',
+                         self._frame,
                          '/mocap')
 
 
@@ -88,7 +86,6 @@ class MocapFrameCalibrator():
                                      self._new_frame_callback)
 
     def _new_frame_callback(self, message):
-        print('call')
         if self._frame_num % self._skip_frames == 0:
             data = point_cloud_to_array(message)[self._base_markers,:,0]            
 
@@ -171,40 +168,11 @@ def find_homog_trans(points_a, points_b, err_threshold=0, rot_0=None, alg='svd')
         homog_3[0:3,3] = cent_b
         homog = sp.dot(homog_3, sp.dot(homog_2, homog_1))
         return homog, rot
-    #---------------------------------------
+    #NEW ALGORITHM -----------------------
     elif alg == 'svd':
         homog = convert.superimposition_matrix(points_a.T, points_b.T)
         return homog, None
 
-
-    # #Define the error function
-    # def error(state):
-    #     rot = state[0:3]
-    #     trans = state[3:6]
-
-    #     #Construct a homography matrix
-    #     homog = np.eye(4)
-    #     homog[0:3,3] = trans
-    #     homog[0:3,0:3] = vec_to_rot(rot)
-
-    #     #Transform points_a
-    #     points_a_h = np.hstack((points_a, np.ones((points_a.shape[0],1))))
-    #     trans_points_a = homog.dot(points_a_h.T).T[:,0:3]
-
-    #     #Compute the error
-    #     err = la.norm(points_a - trans_points_a, axis=1)**2
-    #     return err
-    
-    # #Run the optimization
-    # if rot_0 == None:
-    #     rot_0 = sp.zeros(6)
-    # rot = opt.leastsq(error, rot_0, ftol=1e-20)[0]
-    
-    # #Compute the final homogeneous transformation matrix
-    # homog = np.eye(4)
-    # homog[0:3,3] = rot[3:6]
-    # homog[0:3,0:3] = vec_to_rot(rot[0:3])
-    # return homog, rot
 
 def vec_to_rot(x):
     #Make a 3x3 skew-symmetric matrix
@@ -241,31 +209,14 @@ def load_rigid_body_config(filepath, body_name):
     return data[body_name]['marker_indices'], desired
 
 def main():
+    print(args.calibrate)
+    print(args.frame)
     rospy.init_node('human_frame_publisher')
-
-    #Publish frame --------------------------------
-    #Read the desired coordinates from a file
-    # assignments = None
-    # with open(PREFIX + ASSIGNMENTS, 'r') as ass_file:
-    #     assignments = json.load(ass_file)['assignments']
-
-    # base_indices = []
-    # for group in BASE_MARKERS:
-    #     base_indices.extend(assignments[group])
-
-    # desired = np.load(PREFIX+NPZ)['base_config']
-
-    # frame_publisher = MocapFramePublisher(base_indices, desired)
-    # rospy.spin()
-
-    # Calibrate frame -----------------------------------
     if args.calibrate:
-        frame_calibrator = MocapFrameCalibrator([0,1,2,3,4,5])
+        frame_calibrator = MocapFrameCalibrator(args.calibrate)
     else:
         base_indices, desired = load_rigid_body_config(args.data_file, 'test_body')
-        frame_publisher = MocapFramePublisher(base_indices, desired)
-
-
+        frame_publisher = MocapFramePublisher(base_indices, desired, args.frame)
     rospy.spin()
 
 if __name__ == '__main__':
