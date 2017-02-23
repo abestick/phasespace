@@ -211,7 +211,7 @@ def load_rigid_body_config(filepath, body_name):
 def main():
     print(args.calibrate)
     print(args.frame)
-    rospy.init_node('human_frame_publisher')
+    rospy.init_node('human_frame_publisher', anonymous=True)
     if args.calibrate:
         frame_calibrator = MocapFrameCalibrator(args.calibrate)
     else:
