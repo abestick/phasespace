@@ -20,10 +20,10 @@ class StaticTransformPublisher:
         self.parent_frame = parent_frame
         self.child_frame = child_frame
         self.trans = homog[0:3,3]
-        self.rot = quaternion_from_matrix(homog)
+        self.rot = tf.transformations.quaternion_from_matrix(homog)
         self.rate = rate
 
-    def run():
+    def run(self):
         publisher = tf.TransformBroadcaster()
         timer = rospy.Rate(self.rate)
         while not rospy.is_shutdown():
@@ -43,38 +43,40 @@ class RobotTransformCalibrator:
         self.tf_samples = []
         self.last_sample = rospy.get_time()
 
-    def collect_samples(time=15.0):
+    def collect_samples(self, time=15.0):
         mocap_listener = rospy.Subscriber(self.mocap_topic, sensor_msgs.msg.PointCloud,
                 self.new_frame_callback)
         rospy.sleep(time)
         mocap_listener.unregister()
 
-    def new_frame_callback(msg):
+    def new_frame_callback(self, msg):
         RATE = 5.0
         if rospy.get_time() >= self.last_sample + (1.0 / RATE):
             self.last_sample = rospy.get_time()
             try:
                 (trans,rot) = self.tf_listener.lookupTransform(self.base_frame, self.parent_frame,
                         rospy.Time(0))
-                homog = tf.transformations.quaternion_matrix(rot)
-                homog[0:3,3] = np.array(trans)
-                tf_samples.append(homog)
                 point_cloud = point_cloud_to_array(msg)
-                mocap_samples.append(np.concatenate((point_cloud[marker,:,:], np.array([1]))))
+                if not np.isnan(point_cloud[self.marker,0,0]):
+                    self.mocap_samples.append(np.concatenate((point_cloud[self.marker,:,0], np.array([1])))[:,None])
+                    homog = tf.transformations.quaternion_matrix(rot)
+                    homog[0:3,3] = np.array(trans)
+                    self.tf_samples.append(homog[:,:,None])
+                    print('Collected sample at t=' + str(rospy.get_time()))
             except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
                 pass
         
-    def calibrate():
+    def calibrate(self):
         # Concatenate all samples into arrays
-        p_M = np.concatenate(mocap_samples, axis=1)
-        g_BH = np.concatenate(tf_samples, axis=2)
+        p_M = np.concatenate(self.mocap_samples, axis=1)
+        g_BH = np.concatenate(self.tf_samples, axis=2)
 
         #Optimize the loss function
-        loss_func = vectorize_loss_function(get_loss_function(p_M, g_BH))
+        loss_func = get_loss_function(p_M, g_BH)
         x0 = np.ones((10,))
         vectorized_loss_func = lambda params: loss_func(*unvectorize_params(params))
         result = scipy.optimize.minimize(vectorized_loss_func, x0)
-        return result
+        return unvectorize_params(result.x)[0]
 
 
 
@@ -112,7 +114,7 @@ def unvectorize_params(params):
     p_H = np.hstack((params[7:10], np.array([1])))
     return g_BM, p_H
 
-def save_robot_calibration(filepath, robot_name, robot_base_frame, homog):
+def save_robot_calibration(filepath, robot_base_frame, homog):
     try:
         with open(filepath) as file_handle:
             data = json.load(file_handle)
@@ -136,42 +138,21 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('data_file', help='The file containing the robot calibration data')
     parser.add_argument('--calibrate', nargs=2)
-    parser.add_argument('--frame', default='\mocap')
+    parser.add_argument('--frame', default='/mocap')
     args = parser.parse_args()
+    rospy.init_node('robot_frame_publisher')
 
     if args.calibrate is not None:
         calib = RobotTransformCalibrator(args.calibrate[0], args.calibrate[1])
         calib.collect_samples()
         result = calib.calibrate()
+        print(result)
+        save_robot_calibration(args.data_file, '/base', result)
 
     # Load the calibration data from a file and publish
     robot_base_frame, homog = load_robot_calibration(args.data_file)
-    transform_pub = StaticTransformPublisher(self, robot_base_frame, args.frame, homog, rate=50.0)
+    transform_pub = StaticTransformPublisher(robot_base_frame, args.frame, homog, rate=50.0)
     transform_pub.run()
-
-
-    p_M_1 = np.array([1,2,3,1])
-    p_M_2 = np.array([4,2,6,1])
-    p_M_3 = np.array([0,2,5,1])
-    p_M_4 = np.array([3,-1,5,1])
-    p_M = np.vstack((p_M_1, p_M_2, p_M_3, p_M_4)).T
-    g_BH_1 = tf.transformations.random_rotation_matrix()
-    g_BH_1[0:3,3] = np.array([4,5,6])
-    g_BH_2 = tf.transformations.random_rotation_matrix()
-    g_BH_2[0:3,3] = np.array([4,0,1])
-    g_BH_3 = tf.transformations.random_rotation_matrix()
-    g_BH_3[0:3,3] = np.array([3,-2,1])
-    g_BH_4 = tf.transformations.random_rotation_matrix()
-    g_BH_4[0:3,3] = np.array([4,2,7])
-    g_BH = np.dstack((g_BH_1, g_BH_2, g_BH_3, g_BH_4))
-    loss_func = get_loss_function(p_M, g_BH)
-    g_BM = tf.transformations.random_rotation_matrix()
-    p_H = np.array([1,2,3,1])
-    loss_func(g_BM, p_H)
-
-    loss_func(*unvectorize_params(np.array([1,2,3,4,5,6,7,8,9,10])))
-
-    1/0
 
 if __name__ == '__main__':
     main()
