@@ -34,9 +34,15 @@ except(ImportError):
 
 class MocapSource():
     __metaclass__=ABCMeta
+    def __init__(self):
+        # Initialize vars for coordinate change, if any
+        self._coordinates_mode = None
+        self._desired_coords = None
+        self._desired_idxs = None
+        self._last_transform = None
 
     @abstractmethod
-    def read(self, length=1, block=True):
+    def read(self, frames, timestamps):
         """Reads data from the underlying mocap source. By default, this method 
         will block until the data is read. Returns a tuple (frames, timestamps) 
         where frames is a (num_points, 3, length) ndarray of mocap points, and 
@@ -54,7 +60,38 @@ class MocapSource():
         Once the end of the file/stream is reached, calls to read() will return 
         None.
         """
-        pass
+        # Compute and apply a coordinate transformation, if any
+        if self._coordinates_mode is not None:
+            trans_points = None
+            if self._coordinates_mode == 'time_varying':
+                # Iterate over each frame
+                trans_points = frames.copy()
+                for i in range(trans_points.shape[2]):
+                    # Find which of the specified markers are visible in this frame
+                    visible_inds = np.where(~np.isnan(trans_points[self._desired_idxs,0,i]))[0]
+
+                    # Compute the transformation
+                    orig_points = trans_points[self._desired_idxs[visible_inds],:,i]
+                    desired_points = self._desired_coords[visible_inds]
+                    try:
+                        homog = find_homog_trans(orig_points, desired_points, rot_0=None)[0]
+                        self._last_transform = homog
+                    except ValueError:
+                        # Not enough points visible for tf.transformations to compute the transform
+                        homog = self._last_transform
+
+                    #Apply the transformation to the frame
+                    homog_coords = np.vstack((trans_points[:,:,i].T, np.ones((1,trans_points.shape[0]))))
+                    homog_coords = np.dot(homog, homog_coords)
+                    trans_points[:,:,i] = homog_coords.T[:,0:3]
+            else:
+                raise TypeError('The specified mode is invalid')
+
+            #Save the transformed points
+            frames = trans_points
+
+        # Return the original frames and timestamps with any transformations applied
+        return frames, timestamps
 
     @abstractmethod
     def close(self):
@@ -76,9 +113,11 @@ class MocapSource():
     def set_sampling(self, num_samples, mode='uniform'):
         pass
 
-    @abstractmethod
-    def set_coordinates(self, markers, new_coords, mode='constant'):
-        pass
+    def set_coordinates(self, markers, new_coords, mode='time-varying'):
+        self._coordinates_mode = mode
+        self._desired_coords = new_coords
+        self._desired_idxs = np.array(markers).squeeze()
+        self._last_transform = np.identity(4)
 
     def read_dict(self, name_dict, block=True):
         """Returns a dict mapping marker names to numpy arrays of 
@@ -108,6 +147,7 @@ class MocapSource():
 
 class PhasespaceStream(MocapSource):
     def __init__(self, ip_address, num_points, framerate=None, buffer_length=2):
+        super(PhasespaceStream, self).__init__()
         self._num_points = num_points
         self._shutdown_flag = False
         self._start_time = 0
@@ -206,6 +246,9 @@ class PhasespaceStream(MocapSource):
             timestamps.append(next_sample[1])
         return np.dstack(frames), np.hstack(timestamps)
 
+        # Let MocapSource.read() perform any remaining processing on the data before returning
+        return super(MocapFile, self).read(frames, timestamps)
+
     def close(self):
         self._shutdown_flag = True
         self._reader.join()
@@ -233,6 +276,7 @@ class MocapFile(MocapSource):
         a new MocapFile object
         """
         import btk
+        super(MocapFile, self).__init__()
 
         #Declare fields
         self._all_frames = None
@@ -301,7 +345,9 @@ class MocapFile(MocapSource):
 
         #Increment the read pointer
         self._read_pointer = self._read_pointer + length
-        return frames, timestamps
+
+        # Let MocapSource.read() perform any remaining processing on the data before returning
+        return super(MocapFile, self).read(frames, timestamps)
 
     def close(self):
         pass
@@ -378,79 +424,90 @@ class MocapFile(MocapSource):
         axes.set_zlabel('Z Label')
         axes.set_zlabel('Z Label')
     
-    def set_coordinates(self, markers, new_coords, mode='constant'):
-        """Changes the coordinate system for the mocap sequence from the
-        original coordinate frame x to a new coordinate frame y. The 
-        markers argument specifies the stationary mocap markers to compute 
-        the coordinate change based on, and the coords_y argument is a 
-        (len(markers), 3) array of the desired positions of the specified
-        markers in the new y frame.
-        """
-        trans_points = None
-        if mode == 'constant':
-            #Compute the average coordinates of each marker over all samples,
-            #ignoring occluded markers
-            orig_coords = np.nanmean(self.get_frames()[markers,:,:], axis=2)
-            
-            #Compute and apply the transformation
-            homog = find_homog_trans(orig_coords, new_coords)[0]
-            orig_points = np.hstack((self.get_frames(),
-                    sp.ones((self.get_frames().shape[0], 1, self.get_frames().shape[2]))))
-            trans_points = np.transpose(np.dot(homog, orig_points.T), axes=[2,0,1])[:,0:3,:]
-
-        elif mode == 'time_varying':
-            #Iterate over each frame
-            markers = np.array(markers)
-            rot_0 = np.ones(6)
-            homog_0 = np.eye(4)
-            trans_points = self.get_frames().copy()
-            for i in range(trans_points.shape[2]):
-                #Find which of the specified markers are visible in this frame
-                visible_inds = np.where(~np.isnan(trans_points[markers,0,i]))[0]
-
-                #Just apply the last transformation if no markers are visible
-                homog=None
-                if len(visible_inds) == 0:
-                    homog = homog_0
-
-                #Otherwise, compute the transformation
-                else:
-                    orig_points = trans_points[markers[visible_inds],:,i]
-                    desired_points = new_coords[visible_inds]
-                    try:
-                        homog, rot_0 = find_homog_trans(orig_points, desired_points, rot_0=rot_0)
-                        homog_0 = homog
-                    except ValueError:
-                        # Not enough points visible for tf.transformations to compute the transform
-                        homog = homog_0
-
-                #Apply the transformation to the frame
-                homog_coords = np.vstack((trans_points[:,:,i].T, np.ones((1,trans_points.shape[0]))))
-                homog_coords = np.dot(homog, homog_coords)
-                trans_points[:,:,i] = homog_coords.T[:,0:3]
-                print('Applying base frame transformation to frame: ' + str(i) + '/' + str(trans_points.shape[2]),
-                end='\r')
-                sys.stdout.flush()
-            print()
-
-        else:
-            raise TypeError('The specified mode is invalid')
-
-        #Save the transformed points
-        self._all_frames = trans_points
-        self._all_frames.flags.writeable = False
-    
     def __iter__(self):
         return MocapIterator(self)
 
 class MocapArray(MocapFile):
     def __init__(self, array, framerate):
+        super(MocapFile, self).__init__()
         if array.shape[1] != 3 or array.ndim != 3:
             raise TypeError('Input array is not the correct shape')
 
         self._all_frames = array
         self._timestamps = np.array(range(array.shape[2])) * (1.0/framerate)
         self._read_pointer = 0 #Next element that will be returned by read()
+
+class PointCloudStream(MocapSource):
+    def __init__(self, topic_name, buffer_length=2):
+        super(PointCloudStream, self).__init__()
+        # ROS dependencies only needed here
+        import rospy
+        import sensor_msgs.msg as sensor_msgs
+
+        # Initialize counters
+        self._num_points = -1
+        self._start_time = 0
+        self._frame_count = 0
+
+        #Initialize a circular read buffer
+        self._read_buffer = _RingBuffer(buffer_length)
+
+        #Start the subscriber thread
+        self._sub = rospy.Subscriber('/mocap_point_cloud', sensor_msgs.PointCloud,
+                self._new_frame_callback)
+        self._start_time = time.time()
+
+    def _new_frame_callback(self, message):
+        new_frame = point_cloud_to_array(message)
+        timestamp = np.array(time.time())
+        self._read_buffer.put((new_frame, timestamp))
+        self._frame_count += 1
+        self._num_points = new_frame.shape[0]
+
+    def read(self, length=1, block=True):
+        """Reads data from the underlying mocap source. By default, this method 
+        will block until the data is read. Returns a tuple (frames, timestamps) 
+        where frames is a (num_points, 3, length) ndarray of mocap points, and 
+        timestamps is a (length,) ndarray of the timestamps, in seconds, of the 
+        corresponding mocap points.
+
+        Once the end of the file/stream is reached, calls to read() will return 
+        None. If the end of the stream is reached before length frames are read,
+        the returned arrays may have fewer elements than expected, and all 
+        future calls to read() will return None.
+
+        If called with block=False and no data is available, returns arrays with 
+        length=0.
+
+        Once the end of the file/stream is reached, calls to read() will return 
+        None.
+        """
+        frames = []
+        timestamps = []
+        for i in range(length):
+            next_sample = self._read_buffer.get(block=True)
+            frames.append(next_sample[0])
+            timestamps.append(next_sample[1])
+        return np.dstack(frames), np.hstack(timestamps)
+
+        # Let MocapSource.read() perform any remaining processing on the data before returning
+        return super(MocapFile, self).read(frames, timestamps)
+
+    def close(self):
+        self._sub.unregister()
+
+    def get_num_points(self):
+        return self._num_points
+
+    def get_length(self):
+        return -1
+
+    def get_framerate(self):
+        return self._frame_count / (time.time() - self._start_time)
+
+    def set_sampling(self, num_samples, mode='uniform'):
+        pass
+
 
 class MocapIterator():
     def __init__(self, mocap_obj):
@@ -499,6 +556,12 @@ class RateTimer():
                 # print('Waiting: ' + str(wait_time))
                 time.sleep(wait_time)
 
+def point_cloud_to_array(message):
+    num_points = len(message.points)
+    data = np.empty((num_points, 3, 1))
+    for i, point in enumerate(message.points):
+        data[i,:,0] = [point.x, point.y, point.z]
+    return data
 
 def find_homog_trans(points_a, points_b, err_threshold=0, rot_0=None, alg='svd'):
     """Finds a homogeneous transformation matrix that, when applied to 
