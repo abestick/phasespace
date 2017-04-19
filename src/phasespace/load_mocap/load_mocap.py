@@ -417,8 +417,12 @@ class MocapFile(MocapSource):
                 else:
                     orig_points = trans_points[markers[visible_inds],:,i]
                     desired_points = new_coords[visible_inds]
-                    homog, rot_0 = find_homog_trans(orig_points, desired_points, rot_0=rot_0)
-                    homog_0 = homog
+                    try:
+                        homog, rot_0 = find_homog_trans(orig_points, desired_points, rot_0=rot_0)
+                        homog_0 = homog
+                    except ValueError:
+                        # Not enough points visible for tf.transformations to compute the transform
+                        homog = homog_0
 
                 #Apply the transformation to the frame
                 homog_coords = np.vstack((trans_points[:,:,i].T, np.ones((1,trans_points.shape[0]))))
@@ -530,7 +534,7 @@ def find_homog_trans(points_a, points_b, err_threshold=0, rot_0=None, alg='svd')
         return homog, rot
     #NEW ALGORITHM -----------------------
     elif alg == 'svd':
-    	import tf.transformations as convert
+        import tf.transformations as convert
         homog = convert.superimposition_matrix(points_a.T, points_b.T)
         return homog, None
 
