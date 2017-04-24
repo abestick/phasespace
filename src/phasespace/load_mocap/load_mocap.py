@@ -135,6 +135,9 @@ class MocapSource():
             output_dict[marker_name] = data_point
         return output_dict, timestamp
 
+    def __len__(self):
+        return self.get_length()
+
     def __iter__(self):
         return MocapIterator(self)
 
@@ -340,7 +343,7 @@ class MocapFile(MocapSource):
             length = file_len - self._read_pointer
 
         #Read the frames and timestamps
-        frames = self.get_frames()[:,:,self._read_pointer:self._read_pointer+length]
+        frames = self._get_frames()[:,:,self._read_pointer:self._read_pointer+length]
         timestamps = self.get_timestamps()[self._read_pointer:self._read_pointer+length]
 
         #Increment the read pointer
@@ -352,7 +355,8 @@ class MocapFile(MocapSource):
     def close(self):
         pass
     
-    def get_frames(self):
+    # TODO: Should this method exist at all/use read() so coordinate changes are applied properly? 
+    def _get_frames(self):
         """Returns a (num_points, 3, length) array of the mocap points.
         Always access mocap data through this method.
         """
@@ -366,12 +370,12 @@ class MocapFile(MocapSource):
     def get_num_points(self):
         """Returns the total number of points tracked in the mocap file
         """
-        return self.get_frames().shape[0]
+        return self._get_frames().shape[0]
     
     def get_length(self):
         """Returns the total number of frames in the mocap file
         """
-        return self.get_frames().shape[2]
+        return self._get_frames().shape[2]
     
     def get_framerate(self):
         """Returns the average framerate of the mocap file in Hz"""
@@ -407,7 +411,7 @@ class MocapFile(MocapSource):
         """Plots the location of each marker in the specified frame
         """
         #Get the frame
-        frame = self.get_frames()[:,:,frame_num]
+        frame = self._get_frames()[:,:,frame_num]
         xs = frame[:,0]
         ys = frame[:,1]
         zs = frame[:,2]
