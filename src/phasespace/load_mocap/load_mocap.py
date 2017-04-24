@@ -115,7 +115,7 @@ class MocapSource():
 
     def set_coordinates(self, markers, new_coords, mode='time-varying'):
         self._coordinates_mode = mode
-        self._desired_coords = new_coords
+        self._desired_coords = new_coords.squeeze()
         self._desired_idxs = np.array(markers).squeeze()
         self._last_transform = np.identity(4)
 
