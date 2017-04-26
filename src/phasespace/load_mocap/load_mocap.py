@@ -115,7 +115,7 @@ class MocapSource():
 
     def set_coordinates(self, markers, new_coords, mode='time-varying'):
         self._coordinates_mode = mode
-        self._desired_coords = new_coords
+        self._desired_coords = new_coords.squeeze()
         self._desired_idxs = np.array(markers).squeeze()
         self._last_transform = np.identity(4)
 
@@ -134,6 +134,9 @@ class MocapSource():
             data_point = data_array[name_dict[marker_name],:,0]
             output_dict[marker_name] = data_point
         return output_dict, timestamp
+
+    def __len__(self):
+        return self.get_length()
 
     def __iter__(self):
         return MocapIterator(self)
@@ -258,7 +261,7 @@ class PhasespaceStream(MocapSource):
         return self._num_points
 
     def get_length(self):
-        return -1
+        return 1
 
     def get_framerate(self):
         return self._frame_count / (time.time() - self._start_time)
@@ -340,7 +343,7 @@ class MocapFile(MocapSource):
             length = file_len - self._read_pointer
 
         #Read the frames and timestamps
-        frames = self.get_frames()[:,:,self._read_pointer:self._read_pointer+length]
+        frames = self._get_frames()[:,:,self._read_pointer:self._read_pointer+length]
         timestamps = self.get_timestamps()[self._read_pointer:self._read_pointer+length]
 
         #Increment the read pointer
@@ -352,7 +355,8 @@ class MocapFile(MocapSource):
     def close(self):
         pass
     
-    def get_frames(self):
+    # TODO: Should this method exist at all/use read() so coordinate changes are applied properly? 
+    def _get_frames(self):
         """Returns a (num_points, 3, length) array of the mocap points.
         Always access mocap data through this method.
         """
@@ -366,12 +370,12 @@ class MocapFile(MocapSource):
     def get_num_points(self):
         """Returns the total number of points tracked in the mocap file
         """
-        return self.get_frames().shape[0]
+        return self._get_frames().shape[0]
     
     def get_length(self):
         """Returns the total number of frames in the mocap file
         """
-        return self.get_frames().shape[2]
+        return self._get_frames().shape[2]
     
     def get_framerate(self):
         """Returns the average framerate of the mocap file in Hz"""
@@ -407,7 +411,7 @@ class MocapFile(MocapSource):
         """Plots the location of each marker in the specified frame
         """
         #Get the frame
-        frame = self.get_frames()[:,:,frame_num]
+        frame = self._get_frames()[:,:,frame_num]
         xs = frame[:,0]
         ys = frame[:,1]
         zs = frame[:,2]
@@ -488,10 +492,11 @@ class PointCloudStream(MocapSource):
             next_sample = self._read_buffer.get(block=True)
             frames.append(next_sample[0])
             timestamps.append(next_sample[1])
-        return np.dstack(frames), np.hstack(timestamps)
+        frames = np.dstack(frames)
+        timestamps = np.hstack(timestamps)
 
         # Let MocapSource.read() perform any remaining processing on the data before returning
-        return super(MocapFile, self).read(frames, timestamps)
+        return super(PointCloudStream, self).read(frames, timestamps)
 
     def close(self):
         self._sub.unregister()
@@ -500,7 +505,7 @@ class PointCloudStream(MocapSource):
         return self._num_points
 
     def get_length(self):
-        return -1
+        return 1
 
     def get_framerate(self):
         return self._frame_count / (time.time() - self._start_time)

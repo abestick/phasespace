@@ -1,1 +1,1 @@
-from load_mocap import PhasespaceStream, MocapFile, MocapArray
+from load_mocap import PhasespaceStream, MocapFile, MocapArray, PointCloudStream
