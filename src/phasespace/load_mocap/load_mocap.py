@@ -264,7 +264,7 @@ class PhasespaceStream(MocapSource):
         return self._num_points
 
     def get_length(self):
-        return 1
+        return 0
 
     def get_framerate(self):
         return self._frame_count / (time.time() - self._start_time)
@@ -510,7 +510,7 @@ class PointCloudStream(MocapSource):
         return self._num_points
 
     def get_length(self):
-        return 1
+        return 0
 
     def get_framerate(self):
         return self._frame_count / (time.time() - self._start_time)
