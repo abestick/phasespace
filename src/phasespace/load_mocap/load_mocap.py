@@ -119,6 +119,9 @@ class MocapSource():
         self._desired_idxs = np.array(markers).squeeze()
         self._last_transform = np.identity(4)
 
+    def get_last_coordinates(self):
+        return self._last_transform
+
     def read_dict(self, name_dict, block=True):
         """Returns a dict mapping marker names to numpy arrays of 
         marker coordinates. Argument name_dict is a dict mapping marker
@@ -452,6 +455,7 @@ class PointCloudStream(MocapSource):
         self._num_points = -1
         self._start_time = 0
         self._frame_count = 0
+        self._frame_name = None
 
         #Initialize a circular read buffer
         self._read_buffer = _RingBuffer(buffer_length)
@@ -467,6 +471,7 @@ class PointCloudStream(MocapSource):
         self._read_buffer.put((new_frame, timestamp))
         self._frame_count += 1
         self._num_points = new_frame.shape[0]
+        self._frame_name = message.header.frame_id
 
     def read(self, length=1, block=True):
         """Reads data from the underlying mocap source. By default, this method 
@@ -512,6 +517,9 @@ class PointCloudStream(MocapSource):
 
     def set_sampling(self, num_samples, mode='uniform'):
         pass
+
+    def get_frame_name(self):
+        return self._frame_name
 
 
 class MocapIterator():
