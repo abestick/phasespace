@@ -33,6 +33,23 @@ The script will collect calibration data for 15 seconds after you run this comma
 
 If you've previously computed the robot->mocap transform for your robot and the robot hasn't moved, you can re-publish the existing transform with:
 ```
-rosrun robot_frame_publisher.py <data_file>
+rosrun phasespace robot_frame_publisher.py <data_file>
 ```
 where `<data_file>` is the file name you used when you originally calibrated this robot.
+
+
+Track a Rigid Body
+------------------
+You can use the `rigid_tracker.py` script to track the pose of a rigid constellation of >= 3 mocap markers and publish it via _tf_. You script has two modes to either _calibrate_ or _track_ the rigid body.
+
+To calibrate a new rigid body composed of markers 2, 3, 5, and 6, then publish the rigid's pose immediately after on as the _rigid_ frame, you'd run:
+```
+rosrun phasespace rigid_tracker.py <data_file> --frame rigid
+```
+where `<data_file` is the .txt file to save the rigid calibration to in case you'd like to track the same object again with an identical calibration.
+
+To just track a rigid you've already calibrated, just run:
+```
+rosrun phasespace rigid_tracker.py <data_file --frame <tf_frame_name>
+```
+where, again, `<data_file>` is the previously saved calibration for this object, and `<tf_frame_name` is the frame you'd like the rigid's pose published as.
