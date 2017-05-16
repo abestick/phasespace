@@ -579,31 +579,6 @@ class MocapIterator():
             raise StopIteration()
 
 
-class MocapIteratorOld():
-    def __init__(self, mocap_obj, coordinate_frame=None):
-        # Check that mocap_obj is a MocapFile instance
-        if not hasattr(mocap_obj, 'read'):
-            raise TypeError('A valid MocapSource instance was not given')
-
-        if coordinate_frame is not None and coordinate_frame not in mocap_obj._coordinates_mode:
-            raise ValueError("The requested frame must have been set fisrt. Requested: %s. Saved Frames: %s" %
-                             (coordinate_frame, mocap_obj._coordinates_mode.keys()))
-
-        # Define fields
-        self.mocap_obj = mocap_obj
-        self.coordinate_frame = coordinate_frame
-    
-    def __iter__(self):
-        return self
-
-    def next(self):
-        value = self.mocap_obj.read(coordinate_frame=self.coordinate_frame)
-        if value is not None:
-            return value
-        else:
-            raise StopIteration()
-
-
 class _RingBuffer():
     def __init__(self, size):
         self._buffer = Queue(maxsize=size)
