@@ -19,13 +19,12 @@ import numpy.linalg as la
 from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt
 import scipy.optimize as opt
-import math
-import sys
 from Queue import Queue
 from threading import Thread, RLock
 import time
+from copy import deepcopy
 
-#OWL is only needed by PhasespaceStream
+# OWL is only needed by PhasespaceStream
 try:
     import OWL
 except(ImportError):
@@ -34,15 +33,16 @@ except(ImportError):
 
 class MocapSource():
     __metaclass__=ABCMeta
+
     def __init__(self):
         # Initialize vars for coordinate change, if any
-        self._coordinates_mode = None
-        self._desired_coords = None
-        self._desired_idxs = None
-        self._last_transform = None
+        self._coordinates_mode = {}
+        self._desired_coords = {}
+        self._desired_idxs = {}
+        self._last_transform = {}
 
     @abstractmethod
-    def read(self, frames, timestamps):
+    def read(self, frames, timestamps, coordinate_frame=None):
         """Reads data from the underlying mocap source. By default, this method 
         will block until the data is read. Returns a tuple (frames, timestamps) 
         where frames is a (num_points, 3, length) ndarray of mocap points, and 
@@ -61,29 +61,29 @@ class MocapSource():
         None.
         """
         # Compute and apply a coordinate transformation, if any
-        if self._coordinates_mode is not None:
+        if coordinate_frame is not None:
             trans_points = None
-            if self._coordinates_mode == 'time_varying':
+            if self._coordinates_mode[coordinate_frame] == 'time_varying':
                 # Iterate over each frame
                 trans_points = frames.copy()
                 for i in range(trans_points.shape[2]):
                     # Find which of the specified markers are visible in this frame
-                    visible_inds = np.where(~np.isnan(trans_points[self._desired_idxs,0,i]))[0]
+                    visible_inds = np.where(~np.isnan(trans_points[self._desired_idxs[coordinate_frame],0,i]))[0]
 
                     # Compute the transformation
-                    orig_points = trans_points[self._desired_idxs[visible_inds],:,i]
-                    desired_points = self._desired_coords[visible_inds]
+                    orig_points = trans_points[self._desired_idxs[coordinate_frame][visible_inds], :, i]
+                    desired_points = self._desired_coords[coordinate_frame][visible_inds]
                     try:
                         homog = find_homog_trans(orig_points, desired_points, rot_0=None)[0]
-                        self._last_transform = homog
+                        self._last_transform[coordinate_frame] = homog
                     except ValueError:
                         # Not enough points visible for tf.transformations to compute the transform
                         homog = self._last_transform
 
                     #Apply the transformation to the frame
-                    homog_coords = np.vstack((trans_points[:,:,i].T, np.ones((1,trans_points.shape[0]))))
+                    homog_coords = np.vstack((trans_points[:, :, i].T, np.ones((1, trans_points.shape[0]))))
                     homog_coords = np.dot(homog, homog_coords)
-                    trans_points[:,:,i] = homog_coords.T[:,0:3]
+                    trans_points[:, :, i] = homog_coords.T[:, 0:3]
             else:
                 raise TypeError('The specified mode is invalid')
 
@@ -113,11 +113,11 @@ class MocapSource():
     def set_sampling(self, num_samples, mode='uniform'):
         pass
 
-    def set_coordinates(self, markers, new_coords, mode='time-varying'):
-        self._coordinates_mode = mode
-        self._desired_coords = new_coords.squeeze()
-        self._desired_idxs = np.array(markers).squeeze()
-        self._last_transform = np.identity(4)
+    def set_coordinates(self, coordinate_frame_name, markers, new_coords, mode='time-varying'):
+        self._coordinates_mode[coordinate_frame_name] = mode
+        self._desired_coords[coordinate_frame_name] = new_coords.squeeze()
+        self._desired_idxs[coordinate_frame_name] = np.array(markers).squeeze()
+        self._last_transform[coordinate_frame_name] = np.identity(4)
 
     def get_last_coordinates(self):
         return self._last_transform
@@ -138,6 +138,9 @@ class MocapSource():
             output_dict[marker_name] = data_point
         return output_dict, timestamp
 
+    def clone(self):
+        return deepcopy(self)
+
     def __len__(self):
         return self.get_length()
 
@@ -150,6 +153,9 @@ class MocapSource():
     def __exit__(self, type, value, traceback):
         self.close()
 
+    def iterate(self, coordinate_frame=None):
+        return MocapIterator(self, coordinate_frame)
+
 
 class PhasespaceStream(MocapSource):
     def __init__(self, ip_address, num_points, framerate=None, buffer_length=2):
@@ -158,11 +164,14 @@ class PhasespaceStream(MocapSource):
         self._shutdown_flag = False
         self._start_time = 0
         self._frame_count = 0
-        #Run the read loop at 2000Hz regardless of actual framerate to control 
-        #jitter
+
+        self._buffers = []
+
+        # Run the read loop at 2000Hz regardless of actual framerate to control
+        # jitter
         self._timer = RateTimer(2000)
 
-        #Connect to the server
+        # Connect to the server
         OWL.owlInit(ip_address, 0)
         OWL.owlSetInteger(OWL.OWL_FRAME_BUFFER_SIZE, 0)
 
@@ -173,10 +182,10 @@ class PhasespaceStream(MocapSource):
         for i in range(num_points):
             OWL.owlMarkeri(OWL.MARKER(tracker, i), OWL.OWL_SET_LED, i)
 
-        #Activate tracker
+        # Activate tracker
         OWL.owlTracker(0, OWL.OWL_ENABLE)
 
-        #Set frequency
+        # Set frequency
         if framerate is None:
             OWL.owlSetFloat(OWL.OWL_FREQUENCY, OWL.OWL_MAX_FREQUENCY)
             # self._timer = RateTimer(1500)
@@ -184,17 +193,17 @@ class PhasespaceStream(MocapSource):
             OWL.owlSetFloat(OWL.OWL_FREQUENCY, framerate)
             # self._timer = RateTimer(framerate*3)
 
-        #Start streaming
+        # Start streaming
         OWL.owlSetInteger(OWL.OWL_STREAMING, OWL.OWL_ENABLE)
 
-        #Check for errors
+        # Check for errors
         if OWL.owlGetError() != OWL.OWL_NO_ERROR:
             raise RuntimeError('An error occurred while connecting to the mocap server')
 
-        #Initialize a circular read buffer
+        # Initialize a circular read buffer
         self._read_buffer = _RingBuffer(buffer_length)
 
-        #Start the reader thread
+        # Start the reader thread
         self._reader = Thread(target=self._reader_thread)
         self._reader.daemon = True
         self._start_time = time.time()
@@ -219,6 +228,12 @@ class PhasespaceStream(MocapSource):
                         # print("%d: %f %f %f" % (m.id, m.x, m.y, m.z))
                 timestamp = np.array(time.time())
                 self._read_buffer.put((new_frame, timestamp))
+
+                for b in range(len(self._buffers)):
+                    buffer, args, kwargs = self._buffers[b]
+                    buffer.put(self.read(*args, **kwargs))
+
+
                 self._frame_count += 1
 
             if OWL.owlGetError() != OWL.OWL_NO_ERROR:
@@ -226,7 +241,7 @@ class PhasespaceStream(MocapSource):
             if self._shutdown_flag:
                 return
 
-    def read(self, length=1, block=True):
+    def read(self, length=1, block=True, coordinate_frame=None):
         """Reads data from the underlying mocap source. By default, this method 
         will block until the data is read. Returns a tuple (frames, timestamps) 
         where frames is a (num_points, 3, length) ndarray of mocap points, and 
@@ -247,13 +262,13 @@ class PhasespaceStream(MocapSource):
         frames = []
         timestamps = []
         for i in range(length):
-            next_sample = self._read_buffer.get(block=True)
+            next_sample = self._read_buffer.get(block=block)
             frames.append(next_sample[0])
             timestamps.append(next_sample[1])
-        return np.dstack(frames), np.hstack(timestamps)
+        frames, timestamps = np.dstack(frames), np.hstack(timestamps)
 
         # Let MocapSource.read() perform any remaining processing on the data before returning
-        return super(MocapFile, self).read(frames, timestamps)
+        return super(PhasespaceStream, self).read(frames, timestamps, coordinate_frame)
 
     def close(self):
         self._shutdown_flag = True
@@ -272,8 +287,16 @@ class PhasespaceStream(MocapSource):
     def set_sampling(self, num_samples, mode='uniform'):
         pass
 
-    def set_coordinates(self, markers, new_coords, mode='constant'):
-        pass
+    def register_buffer(self, buffer, *args, **kwargs):
+        """
+        Registers a new buffer which will be updated with the latest frames
+        :param buffer: a queue-like buffer which will receive all new frame data
+        :return: 
+        """
+
+        self._buffers.append((buffer, args, kwargs))
+
+    # def set_coordinates(self, coordinate_frame_name, markers, new_coords, mode='constant'):
 
 
 class MocapFile(MocapSource):
@@ -337,23 +360,23 @@ class MocapFile(MocapSource):
             self._all_frames.flags.writeable = False
             self._timestamps.flags.writeable = False
     
-    def read(self, length=1, block=True):
-        #Make sure we don't try to read past the end of the file
+    def read(self, length=1, block=True, coordinate_frame=None):
+        # Make sure we don't try to read past the end of the file
         file_len = self.get_length()
         if file_len == self._read_pointer:
             return None
         elif length > file_len - self._read_pointer:
             length = file_len - self._read_pointer
 
-        #Read the frames and timestamps
+        # Read the frames and timestamps
         frames = self._get_frames()[:,:,self._read_pointer:self._read_pointer+length]
         timestamps = self.get_timestamps()[self._read_pointer:self._read_pointer+length]
 
-        #Increment the read pointer
+        # Increment the read pointer
         self._read_pointer = self._read_pointer + length
 
         # Let MocapSource.read() perform any remaining processing on the data before returning
-        return super(MocapFile, self).read(frames, timestamps)
+        return super(MocapFile, self).read(frames, timestamps, coordinate_frame)
 
     def close(self):
         pass
@@ -430,9 +453,20 @@ class MocapFile(MocapSource):
         axes.set_ylabel('Y Label')
         axes.set_zlabel('Z Label')
         axes.set_zlabel('Z Label')
-    
-    def __iter__(self):
-        return MocapIterator(self)
+
+    def register_buffer(self, buffer, *args, **kwargs):
+        """
+        Registers a new buffer which will be loaded with all frames
+        :param buffer: a queue-like buffer which will receive all frame data
+        :return: 
+        """
+        for i in range(self.get_length()):
+            frames = self._get_frames()[:, :, i:i+1]
+            timestamps = self.get_timestamps()[i:i+1]
+            buffer.put(super(MocapFile, self).read(frames, timestamps, *args, **kwargs))
+
+        buffer.put(None)
+
 
 class MocapArray(MocapFile):
     def __init__(self, array, framerate):
@@ -443,6 +477,7 @@ class MocapArray(MocapFile):
         self._all_frames = array
         self._timestamps = np.array(range(array.shape[2])) * (1.0/framerate)
         self._read_pointer = 0 #Next element that will be returned by read()
+
 
 class PointCloudStream(MocapSource):
     def __init__(self, topic_name, buffer_length=2):
@@ -461,7 +496,7 @@ class PointCloudStream(MocapSource):
         self._read_buffer = _RingBuffer(buffer_length)
 
         #Start the subscriber thread
-        self._sub = rospy.Subscriber('/mocap_point_cloud', sensor_msgs.PointCloud,
+        self._sub = rospy.Subscriber(topic_name, sensor_msgs.PointCloud,
                 self._new_frame_callback)
         self._start_time = time.time()
 
@@ -473,7 +508,7 @@ class PointCloudStream(MocapSource):
         self._num_points = new_frame.shape[0]
         self._frame_name = message.header.frame_id
 
-    def read(self, length=1, block=True):
+    def read(self, length=1, block=True, coordinate_frame=None):
         """Reads data from the underlying mocap source. By default, this method 
         will block until the data is read. Returns a tuple (frames, timestamps) 
         where frames is a (num_points, 3, length) ndarray of mocap points, and 
@@ -501,7 +536,7 @@ class PointCloudStream(MocapSource):
         timestamps = np.hstack(timestamps)
 
         # Let MocapSource.read() perform any remaining processing on the data before returning
-        return super(PointCloudStream, self).read(frames, timestamps)
+        return super(PointCloudStream, self).read(frames, timestamps, coordinate_frame)
 
     def close(self):
         self._sub.unregister()
@@ -523,23 +558,51 @@ class PointCloudStream(MocapSource):
 
 
 class MocapIterator():
-    def __init__(self, mocap_obj):
-        #Check that mocap_obj is a MocapFile instance
+    def __init__(self, mocap_obj, *args, **kwargs):
+        # Check that mocap_obj is a MocapFile instance
         if not hasattr(mocap_obj, 'read'):
             raise TypeError('A valid MocapSource instance was not given')
-        
-        #Define fields
+
+        # Define fields
         self.mocap_obj = mocap_obj
+        self.buffer = Queue()
+        self.mocap_obj.register_buffer(self.buffer, *args, **kwargs)
+
+    def __iter__(self):
+        return self
+
+    def next(self):
+        value = self.buffer.get(block=True)
+        if value is not None:
+            return value
+        else:
+            raise StopIteration()
+
+
+class MocapIteratorOld():
+    def __init__(self, mocap_obj, coordinate_frame=None):
+        # Check that mocap_obj is a MocapFile instance
+        if not hasattr(mocap_obj, 'read'):
+            raise TypeError('A valid MocapSource instance was not given')
+
+        if coordinate_frame is not None and coordinate_frame not in mocap_obj._coordinates_mode:
+            raise ValueError("The requested frame must have been set fisrt. Requested: %s. Saved Frames: %s" %
+                             (coordinate_frame, mocap_obj._coordinates_mode.keys()))
+
+        # Define fields
+        self.mocap_obj = mocap_obj
+        self.coordinate_frame = coordinate_frame
     
     def __iter__(self):
         return self
 
     def next(self):
-        value = self.mocap_obj.read()
+        value = self.mocap_obj.read(coordinate_frame=self.coordinate_frame)
         if value is not None:
             return value
         else:
             raise StopIteration()
+
 
 class _RingBuffer():
     def __init__(self, size):
@@ -553,6 +616,7 @@ class _RingBuffer():
 
     def get(self, block=True):
         return self._buffer.get(block=block)
+
 
 class RateTimer():
     def __init__(self, frequency):
@@ -569,12 +633,14 @@ class RateTimer():
                 # print('Waiting: ' + str(wait_time))
                 time.sleep(wait_time)
 
+
 def point_cloud_to_array(message):
     num_points = len(message.points)
     data = np.empty((num_points, 3, 1))
     for i, point in enumerate(message.points):
         data[i,:,0] = [point.x, point.y, point.z]
     return data
+
 
 def find_homog_trans(points_a, points_b, err_threshold=0, rot_0=None, alg='svd'):
     """Finds a homogeneous transformation matrix that, when applied to 
@@ -613,6 +679,17 @@ def find_homog_trans(points_a, points_b, err_threshold=0, rot_0=None, alg='svd')
         import tf.transformations as convert
         homog = convert.superimposition_matrix(points_a.T, points_b.T)
         return homog, None
+
+
+def transform_frame(frame, transform):
+
+    frame = frame.copy()
+
+    # Apply the transformation to the frame
+    homog_coords = np.vstack((frame[:, :].T, np.ones((1, frame.shape[0]))))
+    homog_coords = np.dot(transform, homog_coords)
+    frame = homog_coords.T[:, 0:3]
+    return frame
 
 
 def vec_to_rot(x):
