@@ -113,7 +113,29 @@ class MocapSource():
     def set_sampling(self, num_samples, mode='uniform'):
         pass
 
+    @abstractmethod
+    def register_buffer(self, buffer, **kwargs):
+        """
+        Takes in the reference to a queue-like object and populates it with mocap data processed by the read function 
+        with args and kwargs passed.
+        :param buffer: queue like object
+        :param args: arguments for the read function
+        :param kwargs: keyword arguments for the read function
+        :return: 
+        """
+        pass
+
     def set_coordinates(self, coordinate_frame_name, markers, new_coords, mode='time-varying'):
+        """
+        Designates a new coordinate frame defined by a subset of markers and their desired positions in the new frame.
+        This frame can later be accessed by the read function by in order to determine which frame the points are being
+        returned in
+        :param string coordinate_frame_name: the name given to this new coordinate frame
+        :param markers: the markers which define this frame
+        :param new_coords: the desired coordinates of the designated markers when in this frame
+        :param mode: whether this transform is done online or statically (I think?)
+        :return: 
+        """
         self._coordinates_mode[coordinate_frame_name] = mode
         self._desired_coords[coordinate_frame_name] = new_coords.squeeze()
         self._desired_idxs[coordinate_frame_name] = np.array(markers).squeeze()
@@ -139,6 +161,9 @@ class MocapSource():
         return output_dict, timestamp
 
     def clone(self):
+        """
+        Provides a deep copy of itself.
+        """
         return deepcopy(self)
 
     def __len__(self):
@@ -153,8 +178,13 @@ class MocapSource():
     def __exit__(self, type, value, traceback):
         self.close()
 
-    def iterate(self, coordinate_frame=None):
-        return MocapIterator(self, coordinate_frame)
+    def iterate(self, buffer_size, **kwargs):
+        """
+        Provides an iterator that will iterate through this source applying the args and kwargs passed to the read
+        function at each frame. The iterator will have it's own buffer so that reading does not affect other iterators
+        operating on the same source.
+        """
+        return MocapIterator(self, buffer_size, **kwargs)
 
 
 class PhasespaceStream(MocapSource):
@@ -165,6 +195,7 @@ class PhasespaceStream(MocapSource):
         self._start_time = 0
         self._frame_count = 0
 
+        # list for references to external buffers that may get populated with new data and their args and kwargs
         self._buffers = []
 
         # Run the read loop at 2000Hz regardless of actual framerate to control
@@ -229,9 +260,43 @@ class PhasespaceStream(MocapSource):
                 timestamp = np.array(time.time())
                 self._read_buffer.put((new_frame, timestamp))
 
+                # populate each of the registered buffers with the new data
                 for b in range(len(self._buffers)):
+                    # extract the buffer reference, and the corresponding args and kwargs for the read call
                     buffer, args, kwargs = self._buffers[b]
-                    buffer.put(self.read(*args, **kwargs))
+
+                    '''
+                    Here I call the super function directly. An alternative which would give the same would be
+                    self.read(length=1, block=Irrelevant, **kwargs)
+                    I wasn't sure which made more sense but putting the frames into the internal buffer just to pop them
+                    out again seemed silly.
+                    
+                    We may choose to ditch the buffer, now that the external buffer provided by the iterator handles
+                    the blocking. Or we may want to keep it so we can always get out the last N frames without iterating
+                    or manually registering a buffer. 
+                    
+                    If we keep it, I suggest we change some naming. I think we should rename read in MocapSource to
+                    _process_frames, since it doesn't actually read any frames internally when it's called, but rather
+                    its children overloads do then call it to process the read data. And I think private because we 
+                    never expect someone to call that function directly, we always expect the children to find the 
+                    frames and pass them internally. We'd therefore make an abstract read method in MocapSource
+                    
+                    And if we put all the per-frame processing into a _process_frame function so _process_frames looks
+                    like:
+                    for frame in frames:
+                        processed.append(self._process_frame(frame, options))
+                        
+                    then every child will be able to call this function for single frames when updating buffers and
+                    the multi-frame functions can be left for reading chunks of data.
+                    
+                    Then the read function will take selection options (which frames) and processing options (eventually
+                    passed to process_frame). And the iterators will be registed only with processing options, since 
+                    the buffers will be updated with direct calls to _process_frames.
+                    
+                    If we keep the internal ring buffer we could also give it a get_last_n_frames function which peeks
+                    at the latest frames, this way we can make it much larger than 2 and still get recent information.
+                    '''
+                    buffer.put(super(PhasespaceStream, self).read(new_frame, timestamp, **kwargs))
 
 
                 self._frame_count += 1
@@ -287,16 +352,19 @@ class PhasespaceStream(MocapSource):
     def set_sampling(self, num_samples, mode='uniform'):
         pass
 
-    def register_buffer(self, buffer, *args, **kwargs):
+    def register_buffer(self, buffer, **kwargs):
         """
         Registers a new buffer which will be updated with the latest frames
         :param buffer: a queue-like buffer which will receive all new frame data
         :return: 
         """
 
-        self._buffers.append((buffer, args, kwargs))
+        self._buffers.append((buffer, kwargs))
 
     # def set_coordinates(self, coordinate_frame_name, markers, new_coords, mode='constant'):
+        
+    def iterate(self, buffer_size=2, **kwargs):
+        return super(PhasespaceStream, self).iterate(buffer_size, **kwargs)
 
 
 class MocapFile(MocapSource):
@@ -454,7 +522,7 @@ class MocapFile(MocapSource):
         axes.set_zlabel('Z Label')
         axes.set_zlabel('Z Label')
 
-    def register_buffer(self, buffer, *args, **kwargs):
+    def register_buffer(self, buffer, **kwargs):
         """
         Registers a new buffer which will be loaded with all frames
         :param buffer: a queue-like buffer which will receive all frame data
@@ -463,9 +531,13 @@ class MocapFile(MocapSource):
         for i in range(self.get_length()):
             frames = self._get_frames()[:, :, i:i+1]
             timestamps = self.get_timestamps()[i:i+1]
-            buffer.put(super(MocapFile, self).read(frames, timestamps, *args, **kwargs))
+            buffer.put(super(MocapFile, self).read(frames, timestamps, **kwargs))
 
         buffer.put(None)
+
+    def iterate(self, **kwargs):
+        # We never want to limit the buffer
+        return super(MocapFile, self).iterate(0, **kwargs)
 
 
 class MocapArray(MocapFile):
@@ -492,10 +564,13 @@ class PointCloudStream(MocapSource):
         self._frame_count = 0
         self._frame_name = None
 
-        #Initialize a circular read buffer
+        # Initialize a circular read buffer
         self._read_buffer = _RingBuffer(buffer_length)
 
-        #Start the subscriber thread
+        # list for references to external buffers that may get populated with new data and their args and kwargs
+        self._buffers = []
+
+        # Start the subscriber thread
         self._sub = rospy.Subscriber(topic_name, sensor_msgs.PointCloud,
                 self._new_frame_callback)
         self._start_time = time.time()
@@ -504,6 +579,14 @@ class PointCloudStream(MocapSource):
         new_frame = point_cloud_to_array(message)
         timestamp = np.array(time.time())
         self._read_buffer.put((new_frame, timestamp))
+
+        # populate each of the registered buffers with the new data
+        for b in range(len(self._buffers)):
+            # extract the buffer reference, and the corresponding args and kwargs for the read call
+            buffer, args, kwargs = self._buffers[b]
+
+            buffer.put(super(PointCloudStream, self).read(new_frame, timestamp, **kwargs))
+
         self._frame_count += 1
         self._num_points = new_frame.shape[0]
         self._frame_name = message.header.frame_id
@@ -556,17 +639,31 @@ class PointCloudStream(MocapSource):
     def get_frame_name(self):
         return self._frame_name
 
+    def register_buffer(self, buffer, **kwargs):
+        """
+        Registers a new buffer which will be updated with the latest frames
+        :param buffer: a queue-like buffer which will receive all new frame data
+        :return: 
+        """
+
+        self._buffers.append((buffer, kwargs))
+
+    # def set_coordinates(self, coordinate_frame_name, markers, new_coords, mode='constant'):
+
+    def iterate(self, buffer_size=2, **kwargs):
+        return super(PointCloudStream, self).iterate(buffer_size, **kwargs)
+
 
 class MocapIterator():
-    def __init__(self, mocap_obj, *args, **kwargs):
+    def __init__(self, mocap_obj, buffer_size=0, **kwargs):
         # Check that mocap_obj is a MocapFile instance
         if not hasattr(mocap_obj, 'read'):
             raise TypeError('A valid MocapSource instance was not given')
 
         # Define fields
         self.mocap_obj = mocap_obj
-        self.buffer = Queue()
-        self.mocap_obj.register_buffer(self.buffer, *args, **kwargs)
+        self.buffer = _RingBuffer(buffer_size)
+        self.mocap_obj.register_buffer(self.buffer, **kwargs)
 
     def __iter__(self):
         return self
@@ -657,6 +754,12 @@ def find_homog_trans(points_a, points_b, err_threshold=0, rot_0=None, alg='svd')
 
 
 def transform_frame(frame, transform):
+    """
+    Transforms an entire frame of points with a homogenous tansform
+    :param frame: the mocap frame (n,3)
+    :param transform: the transform (4,4)
+    :return: mocap frame (n,3)
+    """
 
     frame = frame.copy()
 
