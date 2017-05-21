@@ -16,7 +16,7 @@ import numpy as np
 import scipy as sp
 import scipy.linalg as spla
 import numpy.linalg as la
-from mpl_toolkits.mplot3d import Axes3D
+from collections import deque
 import matplotlib.pyplot as plt
 import scipy.optimize as opt
 from Queue import Queue
@@ -185,6 +185,10 @@ class MocapSource():
         operating on the same source.
         """
         return MocapIterator(self, buffer_size, **kwargs)
+
+    @abstractmethod
+    def get_latest_frame(self):
+        pass
 
 
 class PhasespaceStream(MocapSource):
@@ -366,6 +370,10 @@ class PhasespaceStream(MocapSource):
     def iterate(self, buffer_size=2, **kwargs):
         return super(PhasespaceStream, self).iterate(buffer_size, **kwargs)
 
+    def get_latest_frame(self, **kwargs):
+        new_frame, timestamp = self._read_buffer.peek()
+        return super(PhasespaceStream, self).read(new_frame, timestamp, **kwargs)
+
 
 class MocapFile(MocapSource):
     def __init__(self, input_data):
@@ -539,6 +547,9 @@ class MocapFile(MocapSource):
         # We never want to limit the buffer
         return super(MocapFile, self).iterate(0, **kwargs)
 
+    def get_latest_frame(self, **kwargs):
+        return self.read(**kwargs)
+
 
 class MocapArray(MocapFile):
     def __init__(self, array, framerate):
@@ -653,6 +664,10 @@ class PointCloudStream(MocapSource):
     def iterate(self, buffer_size=2, **kwargs):
         return super(PointCloudStream, self).iterate(buffer_size, **kwargs)
 
+    def get_latest_frame(self, **kwargs):
+        new_frame, timestamp = self._read_buffer.peek()
+        return super(PointCloudStream, self).read(new_frame, timestamp, **kwargs)
+
 
 class MocapIterator():
     def __init__(self, mocap_obj, buffer_size=0, **kwargs):
@@ -662,7 +677,7 @@ class MocapIterator():
 
         # Define fields
         self.mocap_obj = mocap_obj
-        self.buffer = _RingBuffer(buffer_size)
+        self.buffer = _RingQueue(buffer_size)
         self.mocap_obj.register_buffer(self.buffer, **kwargs)
 
     def __iter__(self):
@@ -676,7 +691,7 @@ class MocapIterator():
             raise StopIteration()
 
 
-class _RingBuffer():
+class _RingQueue():
     def __init__(self, size):
         self._buffer = Queue(maxsize=size)
 
@@ -688,6 +703,40 @@ class _RingBuffer():
 
     def get(self, block=True):
         return self._buffer.get(block=block)
+
+
+class _RingBuffer(deque):
+    def __init__(self, size):
+        super(_RingBuffer, self).__init__(maxlen=size)
+
+    def put(self, item):
+        self.append(item)
+
+    def get_oldest(self):
+        return self.popleft()
+
+    def get_latest(self):
+        return self.pop()
+
+    def get_oldest_n(self, n):
+        return [self.popleft() for i in range(n)]
+
+    def peek(self, i=-1):
+        return self[i]
+
+    def peek_latest_n(self, n):
+        return self[-n:]
+
+    def peek_oldest_n(self, n):
+        return self[:n]
+
+    def get(self, block=True):
+        if block:
+            while len(self) == 0:
+                time.sleep(0.01)
+
+        return self.peek(0)
+
 
 
 class RateTimer():
