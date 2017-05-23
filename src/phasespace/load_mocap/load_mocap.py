@@ -68,7 +68,8 @@ class MocapSource():
                 trans_points = frames.copy()
                 for i in range(trans_points.shape[2]):
                     # Find which of the specified markers are visible in this frame
-                    visible_inds = np.where(~np.isnan(trans_points[self._desired_idxs[coordinate_frame],0,i]))[0]
+                    # visible_inds = np.where(~np.isnan(trans_points[self._desired_idxs[coordinate_frame],0,i]))[0]
+                    visible_inds = ~np.isnan(trans_points[self._desired_idxs[coordinate_frame], :, i]).any(axis=1)
 
                     # Compute the transformation
                     orig_points = trans_points[self._desired_idxs[coordinate_frame][visible_inds], :, i]
@@ -191,16 +192,88 @@ class MocapSource():
         pass
 
 
-class PhasespaceStream(MocapSource):
+
+class MocapStream(MocapSource):
+
+
+    @abstractmethod
+    def __init__(self, buffer_length=2):
+        super(MocapStream, self).__init__()
+        self._num_points = -1
+        self._frame_count = 0
+        self._start_time = 0
+        self._buffers = []
+
+
+        # Initialize a circular read buffer
+        self._read_buffer = _RingBuffer(buffer_length)
+
+
+    def read(self, length=1, block=True, coordinate_frame=None):
+        """Reads data from the underlying mocap source. By default, this method 
+        will block until the data is read. Returns a tuple (frames, timestamps) 
+        where frames is a (num_points, 3, length) ndarray of mocap points, and 
+        timestamps is a (length,) ndarray of the timestamps, in seconds, of the 
+        corresponding mocap points.
+
+        Once the end of the file/stream is reached, calls to read() will return 
+        None. If the end of the stream is reached before length frames are read,
+        the returned arrays may have fewer elements than expected, and all 
+        future calls to read() will return None.
+
+        If called with block=False and no data is available, returns arrays with 
+        length=0.
+
+        Once the end of the file/stream is reached, calls to read() will return 
+        None.
+        """
+        frames = []
+        timestamps = []
+        for i in range(length):
+            next_sample = self._read_buffer.get(block=block)
+            frames.append(next_sample[0])
+            timestamps.append(next_sample[1])
+        frames, timestamps = np.dstack(frames), np.hstack(timestamps)
+
+        # Let MocapSource.read() perform any remaining processing on the data before returning
+        return super(MocapStream, self).read(frames, timestamps, coordinate_frame)
+
+    def get_num_points(self):
+        return self._num_points
+
+    def get_length(self):
+        return 0
+
+    def get_framerate(self):
+        return self._frame_count / (time.time() - self._start_time)
+
+    def set_sampling(self, num_samples, mode='uniform'):
+        pass
+
+    def register_buffer(self, buffer, **kwargs):
+        """
+        Registers a new buffer which will be updated with the latest frames
+        :param buffer: a queue-like buffer which will receive all new frame data
+        :return: 
+        """
+
+        self._buffers.append((buffer, kwargs))
+
+    # def set_coordinates(self, coordinate_frame_name, markers, new_coords, mode='constant'):
+
+    def iterate(self, buffer_size=2, **kwargs):
+        return super(MocapStream, self).iterate(buffer_size, **kwargs)
+
+    def get_latest_frame(self, **kwargs):
+        new_frame, timestamp = self._read_buffer.peek()
+        return super(MocapStream, self).read(new_frame, timestamp, **kwargs)
+
+
+class PhasespaceStream(MocapStream):
     def __init__(self, ip_address, num_points, framerate=None, buffer_length=2):
-        super(PhasespaceStream, self).__init__()
+        super(PhasespaceStream, self).__init__(buffer_length)
         self._num_points = num_points
         self._shutdown_flag = False
-        self._start_time = 0
-        self._frame_count = 0
-
-        # list for references to external buffers that may get populated with new data and their args and kwargs
-        self._buffers = []
 
         # Run the read loop at 2000Hz regardless of actual framerate to control
         # jitter
@@ -234,9 +307,6 @@ class PhasespaceStream(MocapSource):
         # Check for errors
         if OWL.owlGetError() != OWL.OWL_NO_ERROR:
             raise RuntimeError('An error occurred while connecting to the mocap server')
-
-        # Initialize a circular read buffer
-        self._read_buffer = _RingBuffer(buffer_length)
 
         # Start the reader thread
         self._reader = Thread(target=self._reader_thread)
@@ -562,24 +632,14 @@ class MocapArray(MocapFile):
         self._read_pointer = 0 #Next element that will be returned by read()
 
 
-class PointCloudStream(MocapSource):
+class PointCloudStream(MocapStream):
     def __init__(self, topic_name, buffer_length=2):
-        super(PointCloudStream, self).__init__()
+        super(PointCloudStream, self).__init__(buffer_length)
         # ROS dependencies only needed here
         import rospy
         import sensor_msgs.msg as sensor_msgs
 
-        # Initialize counters
-        self._num_points = -1
-        self._start_time = 0
-        self._frame_count = 0
         self._frame_name = None
-
-        # Initialize a circular read buffer
-        self._read_buffer = _RingBuffer(buffer_length)
-
-        # list for references to external buffers that may get populated with new data and their args and kwargs
-        self._buffers = []
 
         # Start the subscriber thread
         self._sub = rospy.Subscriber(topic_name, sensor_msgs.PointCloud,
