@@ -23,6 +23,7 @@ from Queue import Queue
 from threading import Thread, RLock
 import time
 from copy import deepcopy
+import tf.transformations
 
 # OWL is only needed by PhasespaceStream
 try:
@@ -579,26 +580,35 @@ class MocapFile(MocapSource):
         self._all_frames.flags.writeable = False
         self._timestamps.flags.writeable = False
     
-    def plot_frame(self, frame_num, mark_num):
+    def plot_frame(self, frame_num=None, mark_num=None, xyz_rotation=(0,0,0), azimuth=60,
+            elevation=30):
         """Plots the location of each marker in the specified frame
         """
         #Get the frame
-        frame = self._get_frames()[:,:,frame_num]
+        if frame_num is not None:
+            frame = self._get_frames()[:,:,frame_num]
+        else:
+            frame = self.read()[0][:,:,0]
+
+        # Apply any desired rotation
+        rot_matrix = tf.transformations.euler_matrix(*xyz_rotation)[0:3,0:3]
+        frame = rot_matrix.dot(frame.T).T
         xs = frame[:,0]
         ys = frame[:,1]
         zs = frame[:,2]
         
         #Make the plot
-        figure = plt.figure()
+        figure = plt.figure(figsize=(11,10))
         axes = figure.add_subplot(111, projection='3d')
         markers = ['r']*self.get_num_points()
-        markers[mark_num] = 'b'
-        axes.scatter(xs, ys, zs, c=markers, marker='o')
-        axes.auto_scale_xyz([-1000,1000], [-1000, 1000], [0, 2000])
-        axes.set_xlabel('X Label')
-        axes.set_ylabel('Y Label')
-        axes.set_zlabel('Z Label')
-        axes.set_zlabel('Z Label')
+        if mark_num is not None:
+            markers[mark_num] = 'b'
+        axes.scatter(xs, ys, zs, c=markers, marker='o', s=60)
+        axes.auto_scale_xyz([-0.35,0.35], [-0.35,0.35], [-0.35,0.35])
+        axes.set_xlabel('X (m)')
+        axes.set_ylabel('Y (m)')
+        axes.set_zlabel('Z (m)')
+        # axes.view_init(elev=elevation, azim=azimuth)
 
     def register_buffer(self, buffer, **kwargs):
         """
@@ -619,7 +629,7 @@ class MocapFile(MocapSource):
 
     def get_latest_frame(self, **kwargs):
         return self.read(**kwargs)
-
+        
 
 class MocapArray(MocapFile):
     def __init__(self, array, framerate):

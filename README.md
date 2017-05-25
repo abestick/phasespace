@@ -21,7 +21,7 @@ roslaunch phasespace mocap_gui.launch
 
 Align Mocap and Robot Coordinate Frames
 ---------------------------------------
-In order to represent both mocap and robot pose data in one unified tf transform tree (useful if you'd like to view robot+mocap simultaneously in RViz or program a robot to interact with objects tracked using mocap markers), we need to tell tf the /robot->/mocap coordinate transform. The `publish_robot_transform.py` script will compute and publish this transform for you.
+In order to represent both mocap and robot pose data in one unified tf transform tree (useful if you'd like to view robot+mocap simultaneously in RViz or program a robot to interact with objects tracked using mocap markers), we need to tell tf the /robot->/mocap coordinate transform. The `robot_frame_publisher.py` script will compute and publish this transform for you.
 
 To compute and publish the robot->mocap transform, attach a single mocap marker (configured as marker 0) to the end of one of your robot's limbs. Start the mocap data publisher, as described above. Then run:
 ```
