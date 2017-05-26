@@ -32,6 +32,16 @@ except(ImportError):
     pass
 
 class MocapSource(object):
+    """Base class for online and offline mocap sources.
+
+    After initializing a MocapSource, multiple clients can access the data from the source through
+    MocapStreams, like:
+    >>> source = MocapSource()
+    >>> stream = source.get_stream()
+    >>> frame, timestamp = stream.read()
+    >>> for (frame, timestamp) in stream:
+    >>>     ...
+    """
     __metaclass__=ABCMeta
 
     def __init__(self):
@@ -85,6 +95,8 @@ class MocapSource(object):
         self._buffers.append(buffer)
 
     def unregister_buffer(self, buffer):
+        """Unregister a previously registered buffer
+        """
         self._buffers.remove(buffer)
 
     def __len__(self):
@@ -109,9 +121,13 @@ class OnlineMocapSource(MocapSource):
             buffer.put((frame, timestamp))
 
     def get_length(self):
+        """Return a length of 0 for online MocapSources (since the real length is undetermined)
+        """
         return 0
 
     def get_stream(self):
+        """Gets a stream for this MocapSource.
+        """
         return MocapStream(self, max_buffer_len=DEFAULT_BUFFER_LEN)
 
 class OfflineMocapSource(MocapSource):
@@ -197,6 +213,8 @@ class OfflineMocapSource(MocapSource):
         # axes.view_init(elev=elevation, azim=azimuth)
 
     def get_stream(self):
+        """Gets a stream for this MocapSource.
+        """
         return MocapStream(self, max_buffer_len=len(self))
 
 
@@ -262,6 +280,8 @@ class MocapStream(object):
         return np.dstack(frames), np.hstack(timestamps)
 
     def read(self, length=1, block=True):
+        """Reads the specified number of frames from the MocapSource.
+        """
         frames, timestamps = self._get_frames(length, block)
         frames, timestamps = self._process_frames(frames, timestamps)
         return frames, timestamps
