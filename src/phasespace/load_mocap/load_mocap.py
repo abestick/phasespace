@@ -155,6 +155,7 @@ class OfflineMocapSource(MocapSource):
         super(OfflineMocapSource, self).register_buffer(buffer)
         for i in range(self._frames.shape[2]):
             buffer.put((self._frames[:,:,i:i+1], self._timestamps[i:i+1]))
+        buffer.put(None)
 
     def _get_frames(self):
         """Returns a (num_points, 3, length) array of the mocap points.
@@ -215,13 +216,14 @@ class OfflineMocapSource(MocapSource):
     def get_stream(self):
         """Gets a stream for this MocapSource.
         """
-        return MocapStream(self, max_buffer_len=len(self))
+        return MocapStream(self, max_buffer_len=len(self)+1)
 
 
 class MocapStream(object):
     def __init__(self, mocap_source, max_buffer_len=0):
         self._source = mocap_source
         self._buffer = Queue.Queue(maxsize=max_buffer_len)
+        self._is_eof = False
 
         # Counters for get_framerate()
         self._frame_count = 0
@@ -249,10 +251,11 @@ class MocapStream(object):
             (num_points, 3, 1) ndarray - the frame to add to the queue
             (1,) ndarray - the timestamp of the frame
         """
-        if frame[0].ndim != 3 or frame[0].shape[1] != 3 or frame[0].shape[2] != 1:
-            raise ValueError("Frame array must be (num_points, 3, 1)")
-        if frame[1].ndim != 1 or frame[1].shape[0] != 1:
-            raise ValueError("Timestamp array must be (1,)")
+        if frame is not None:
+            if frame[0].ndim != 3 or frame[0].shape[1] != 3 or frame[0].shape[2] != 1:
+                raise ValueError("Frame array must be (num_points, 3, 1)")
+            if frame[1].ndim != 1 or frame[1].shape[0] != 1:
+                raise ValueError("Timestamp array must be (1,)")
 
         # Add the frame to the buffer, removing and old frame first if the buffer is full
         try:
@@ -268,13 +271,21 @@ class MocapStream(object):
 
     def _get_frames(self, length, block):
         """Gets the specified number of frames and timestamps from the buffer and returns them as a
-        tuple of ndarrays.
+        tuple of ndarrays. Raises an EOFError when the end of the stream is reached.
         """
+        if self._is_eof:
+            raise EOFError()
         frames = []
         timestamps = []
         for i in range(length):
             try:
                 next_sample = self._buffer.get(block=block)
+                if next_sample is None:
+                    self._is_eof = True
+                    if i is 0:
+                        raise EOFError()
+                    else:
+                        break
             except Queue.Empty:
                 break
             frames.append(next_sample[0])
@@ -282,7 +293,8 @@ class MocapStream(object):
         return np.dstack(frames), np.hstack(timestamps)
 
     def read(self, length=1, block=True):
-        """Reads the specified number of frames from the MocapSource.
+        """Reads the specified number of frames from the MocapSource. Raises an EOFError
+        when the end of the stream is reached.
         """
         frames, timestamps = self._get_frames(length, block)
         frames, timestamps = self._process_frames(frames, timestamps)
@@ -326,6 +338,7 @@ class MocapStream(object):
 
     def read_dict(self, name_dict, block=True):
         """Returns a dict mapping marker names to numpy arrays of marker coordinates.
+        Raises an EOFError when the end of the stream is reached.
 
         Args:
         name_dict: dict - maps marker names to the corresponding marker indices
@@ -381,7 +394,7 @@ class MocapStream(object):
         self._source.unregister_buffer(self)
 
     def __iter__(self):
-        return MocapIterator(self)
+        return MocapStreamIterator(self)
 
     def __len__(self):
         return self.get_length()
@@ -570,24 +583,20 @@ class PointCloudStream(OnlineMocapSource):
         return self._frame_name
 
 
-class MocapIterator():
+class MocapStreamIterator():
     def __init__(self, mocap_stream):
-        # Check that mocap_stream is a MocapFile instance
+        # Check that mocap_stream is a MocapStream instance
         if not hasattr(mocap_stream, 'read'):
-            raise TypeError('A valid MocapSource instance was not given')
+            raise TypeError('A valid MocapStream instance was not given')
 
         # Define fields
         self.mocap_stream = mocap_stream
-        self.mocap_stream.register_buffer(self.buffer, **kwargs)
-
-    def __iter__(self):
-        return self
 
     def next(self):
-        value = self.mocap_stream.read(block=True)
-        if value is not None:
+        try:
+            value = self.mocap_stream.read(block=True)
             return value
-        else:
+        except EOFError:
             raise StopIteration()
 
 
