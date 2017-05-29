@@ -23,7 +23,7 @@ import Queue
 from threading import Thread, RLock
 import time
 from copy import deepcopy
-import tf.transformations
+import tf.transformations as transformations
 
 # OWL is only needed by PhasespaceStream
 try:
@@ -154,7 +154,7 @@ class OfflineMocapSource(MocapSource):
         """
         super(OfflineMocapSource, self).register_buffer(buffer)
         for i in range(self._frames.shape[2]):
-            buffer.put((frames[:,:,i:i+1], timestamps[i:i+1]))
+            buffer.put((self._frames[:,:,i:i+1], self._timestamps[i:i+1]))
 
     def _get_frames(self):
         """Returns a (num_points, 3, length) array of the mocap points.
@@ -193,7 +193,7 @@ class OfflineMocapSource(MocapSource):
             frame = self.read()[0][:,:,0]
 
         # Apply any desired rotation
-        rot_matrix = tf.transformations.euler_matrix(*xyz_rotation)[0:3,0:3]
+        rot_matrix = transformations.euler_matrix(*xyz_rotation)[0:3,0:3]
         frame = rot_matrix.dot(frame.T).T
         xs = frame[:,0]
         ys = frame[:,1]
@@ -221,7 +221,6 @@ class OfflineMocapSource(MocapSource):
 class MocapStream(object):
     def __init__(self, mocap_source, max_buffer_len=0):
         self._source = mocap_source
-        self._source.register_buffer(self)
         self._buffer = Queue.Queue(maxsize=max_buffer_len)
 
         # Counters for get_framerate()
@@ -233,6 +232,9 @@ class MocapStream(object):
         self._desired_coords = None
         self._desired_idxs = None
         self._last_transform = np.identity(4)
+
+        # Register this stream (do this last so it's ready to receive frames from an offline source)
+        self._source.register_buffer(self)
 
     def put(self, frame):
         """Adds new a new frame to the stream's buffer. MocapSources with which this stream is 
@@ -571,7 +573,7 @@ class PointCloudStream(OnlineMocapSource):
 class MocapIterator():
     def __init__(self, mocap_stream):
         # Check that mocap_stream is a MocapFile instance
-        if not hasattr mocap_stream, 'read'):
+        if not hasattr(mocap_stream, 'read'):
             raise TypeError('A valid MocapSource instance was not given')
 
         # Define fields
@@ -647,8 +649,7 @@ def find_homog_trans(points_a, points_b, err_threshold=0, rot_0=None, alg='svd')
         return homog, rot
     #NEW ALGORITHM -----------------------
     elif alg == 'svd':
-        import tf.transformations as convert
-        homog = convert.superimposition_matrix(points_a.T, points_b.T)
+        homog = transformations.superimposition_matrix(points_a.T, points_b.T)
         return homog, None
 
 
