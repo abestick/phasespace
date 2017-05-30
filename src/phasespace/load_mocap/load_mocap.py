@@ -90,12 +90,15 @@ class MocapSource(object):
         Takes in the reference to a queue-like object and populates it with mocap data processed.
         
         Args:
-        buffer - queue like object with a put() method
+        buffer: MocapStream (or any object with a .put() method) - the buffer to register
         """
         self._buffers.append(buffer)
 
     def unregister_buffer(self, buffer):
         """Unregister a previously registered buffer
+
+        Args:
+        buffer: reference to the buffer to unregister
         """
         self._buffers.remove(buffer)
 
@@ -104,6 +107,13 @@ class MocapSource(object):
 
 
 class OnlineMocapSource(MocapSource):
+    """Base class for real-time streaming MocapSource instances.
+
+    These sources receive their data from a source such as a mocap system or a ROS topic,
+    so they don't have a predefined length (len(source)=0). By default, OnlineMocapSources don't
+    do any buffering of their own, so buffers registered with them will receive only the frames
+    which arrive after the buffer is registered.
+    """
     __metaclass__=ABCMeta
     DEFAULT_BUFFER_LEN = 10
 
@@ -114,8 +124,8 @@ class OnlineMocapSource(MocapSource):
         """Writes a new frame to each of the currently registered buffers.
 
         Args:
-        frame - (num_markers, 3, 1) ndarray - the frame data
-        timestamps - (1,) ndarray - the corresponding timestamp
+        frame: (num_markers, 3, 1) ndarray - the frame data
+        timestamps: (1,) ndarray - the corresponding timestamp
         """
         for buffer in self._buffers:
             buffer.put((frame, timestamp))
@@ -127,6 +137,9 @@ class OnlineMocapSource(MocapSource):
 
     def get_stream(self):
         """Gets a stream for this MocapSource.
+
+        The stream will be created with a short max length to prevent memory leaks if it
+        receives data for an extended time without being read from or closed.
         """
         return MocapStream(self, max_buffer_len=DEFAULT_BUFFER_LEN)
 
@@ -137,9 +150,16 @@ class OfflineMocapSource(MocapSource):
         """Initialize an OfflineMocapSource with the frames and timestamps ndarrays from the file,
         array, etc.
 
+        These sources are backed by a static data source like an array or a file. Pointers to this
+        backing data source are passed to the constructor. When a new buffer is registered with
+        this source, all the frames from the mocap source will be immediately written to it,
+        followed by a None value to indicate the end of the data source. Unlike OnlineMocapSources,
+        every buffer will receive exactly the same frames from this source, regardless of when it
+        is registered.
+
         Args:
-        frames - (num_markers, 3, num_frames) ndarray - the frames array
-        timestamps - (num_frames,) - the timestamps array
+        frames: (num_markers, 3, num_frames) ndarray - the backing array of all mocap frames
+        timestamps: (num_frames,) - array of corresponding timestamps for each frame
         """
         super(OfflineMocapSource, self).__init__()
         if frames.ndim != 3 or frames.shape[1] != 3:
@@ -150,7 +170,14 @@ class OfflineMocapSource(MocapSource):
         self._timestamps = timestamps
 
     def register_buffer(self, buffer):
-        """Register a buffer, then immediately output all the frames from the offline source to it
+        """Register a buffer a new buffer.
+
+        All frames from this MocapSource's backing arrays will be immediately written to the new
+        buffer, followed by a None value to indicate the end of the data. To avoid missing frames,
+        ensure the buffer has a max_length>=len(source)+1.
+
+        Args:
+        buffer: MocapStream (or any object with a .put() method) - the buffer to register
         """
         super(OfflineMocapSource, self).register_buffer(buffer)
         for i in range(self._frames.shape[2]):
@@ -215,12 +242,27 @@ class OfflineMocapSource(MocapSource):
 
     def get_stream(self):
         """Gets a stream for this MocapSource.
+
+        Since all the frames from this source will be immediately written to the stream's buffer,
+        the buffer is created with max_length=len(self)+1 so it can hold all the data.
         """
         return MocapStream(self, max_buffer_len=len(self)+1)
 
 
 class MocapStream(object):
     def __init__(self, mocap_source, max_buffer_len=0):
+        """The default stream/buffer object to use for reading data from a MocapSource.
+
+        A MocapStream instance buffers data received from a MocapSource until it is read. Data can
+        be read using the read() or read_dict() methods, or the MocapStream instance itself can be
+        iterated over in a loop. 
+
+        Args:
+        mocap_source: the MocapSource instance to attach to (the new MocapStream instance will
+            be automatically registered with this source)
+        max_buffer_len: int - the maximum length of the new frame buffer. If new frames arrive and
+            the buffer is full, the oldest frames will be discarded to accomodate the new data. 
+        """
         self._source = mocap_source
         self._buffer = Queue.Queue(maxsize=max_buffer_len)
         self._is_eof = False
