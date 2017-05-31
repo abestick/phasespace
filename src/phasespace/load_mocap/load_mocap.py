@@ -141,7 +141,7 @@ class OnlineMocapSource(MocapSource):
         The stream will be created with a short max length to prevent memory leaks if it
         receives data for an extended time without being read from or closed.
         """
-        return MocapStream(self, max_buffer_len=DEFAULT_BUFFER_LEN)
+        return MocapStream(self, max_buffer_len=self.DEFAULT_BUFFER_LEN)
 
 class OfflineMocapSource(MocapSource):
     __metaclass__=ABCMeta
