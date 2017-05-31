@@ -115,7 +115,6 @@ class OnlineMocapSource(MocapSource):
     which arrive after the buffer is registered.
     """
     __metaclass__=ABCMeta
-    DEFAULT_BUFFER_LEN = 10
 
     def __init__(self):
         super(OnlineMocapSource, self).__init__()
@@ -141,7 +140,7 @@ class OnlineMocapSource(MocapSource):
         The stream will be created with a short max length to prevent memory leaks if it
         receives data for an extended time without being read from or closed.
         """
-        return MocapStream(self, max_buffer_len=DEFAULT_BUFFER_LEN)
+        return MocapStream(self, max_buffer_len=10)
 
 class OfflineMocapSource(MocapSource):
     __metaclass__=ABCMeta
@@ -448,9 +447,9 @@ class MocapStream(object):
         self.close()
 
 
-class PhasespaceStream(OnlineMocapSource):
+class PhasespaceMocapSource(OnlineMocapSource):
     def __init__(self, ip_address, num_points, framerate=None):
-        super(PhasespaceStream, self).__init__()
+        super(PhasespaceMocapSource, self).__init__()
         self._num_points = num_points
         self._shutdown_flag = False
 
@@ -510,8 +509,10 @@ class PhasespaceStream(OnlineMocapSource):
                         new_frame[m.id,1,0] = m.y
                         new_frame[m.id,2,0] = m.z
                         # print("%d: %f %f %f" % (m.id, m.x, m.y, m.z))
-                timestamp = np.array(time.time())
+                timestamp = np.zeros((1,))
+                timestamp[0] = time.time()
                 self._output_frame(new_frame, timestamp)
+
 
             if OWL.owlGetError() != OWL.OWL_NO_ERROR:
                 print('A mocap read error occurred')
@@ -522,7 +523,7 @@ class PhasespaceStream(OnlineMocapSource):
         return self._num_points
 
 
-class MocapFile(OfflineMocapSource):
+class FileMocapSource(OfflineMocapSource):
     def __init__(self, input_data):
         """Loads a motion capture file (currently a C3D file) to create 
         a new MocapFile object
@@ -569,7 +570,7 @@ class MocapFile(OfflineMocapSource):
         timestamps = sp.array(range(length), dtype='float') * period
         
         # Initialize this OfflineMocapSource with the resulting frames and timestamps arrays
-        super(MocapFile, self).__init__(frames, timestamps)
+        super(FileMocapSource, self).__init__(frames, timestamps)
 
         
     # def set_sampling(self, num_samples, mode='uniform'):
@@ -588,15 +589,15 @@ class MocapFile(OfflineMocapSource):
     #     self._timestamps.flags.writeable = False
         
 
-class MocapArray(OfflineMocapSource):
+class ArrayMocapSource(OfflineMocapSource):
     def __init__(self, array, framerate):
         timestamps = np.array(range(array.shape[2])) * (1.0/framerate)
-        super(MocapArray, self).__init__(array, timestamps)
+        super(ArrayMocapSource, self).__init__(array, timestamps)
 
 
-class PointCloudStream(OnlineMocapSource):
+class PointCloudMocapSource(OnlineMocapSource):
     def __init__(self, topic_name):
-        super(PointCloudStream, self).__init__()
+        super(PointCloudMocapSource, self).__init__()
         # ROS dependencies only needed here
         import rospy
         import sensor_msgs.msg as sensor_msgs
@@ -610,7 +611,8 @@ class PointCloudStream(OnlineMocapSource):
 
     def _new_frame_callback(self, message):
         new_frame = point_cloud_to_array(message)
-        timestamp = np.array(time.time())
+        timestamp = np.zeros((1,))
+        timestamp[0] = time.time()
         self._output_frame(new_frame, timestamp)
         self._num_points = new_frame.shape[0]
         self._frame_name = message.header.frame_id

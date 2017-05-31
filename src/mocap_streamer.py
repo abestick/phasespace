@@ -5,7 +5,7 @@ import time
 import sensor_msgs.msg as sensor_msgs
 import geometry_msgs.msg as geometry_msgs
 import std_msgs.msg as std_msgs
-import load_mocap
+import phasespace.load_mocap as load_mocap
 import sys
 import argparse
 
@@ -27,8 +27,8 @@ def main():
     rospy.init_node('mocap_streamer')
 
     #Load the mocap stream
-    with load_mocap.PhasespaceStream('192.168.1.120', num_points=32, 
-                                     framerate=50, buffer_length=2) as mocap:
+    with load_mocap.PhasespaceMocapSource('192.168.1.120', num_points=32, 
+                                     framerate=50).get_stream() as mocap:
 
         #Play the points from the mocap stream
         #Loop until the node is killed with Ctrl+C

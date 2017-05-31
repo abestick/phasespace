@@ -1,1 +1,1 @@
-from load_mocap import PhasespaceStream, MocapFile, MocapArray, PointCloudStream, transform_frame, find_homog_trans
+from load_mocap import PhasespaceMocapSource, FileMocapSource, ArrayMocapSource, PointCloudMocapSource, transform_frame, find_homog_trans
