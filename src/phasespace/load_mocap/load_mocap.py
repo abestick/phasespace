@@ -444,6 +444,9 @@ class MocapStream(object):
     def set_coordinates(self, markers, new_coords, mode='time-varying'):
         self._transformer.set_coordinates(markers, new_coords, mode)
 
+    def get_last_coordinates(self):
+        return self._transformer.get_last_coordinates()
+
     def close(self):
         self._source.unregister_buffer(self)
 
