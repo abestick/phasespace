@@ -249,6 +249,67 @@ class OfflineMocapSource(MocapSource):
         return MocapStream(self, max_buffer_len=len(self)+1)
 
 
+class MocapTransformer(object):
+    def __init__(self):
+        # Data about the coordinate transformation to apply
+        self._coordinates_mode = None
+        self._desired_coords = None
+        self._desired_idxs = None
+        self._last_transform = np.identity(4)
+
+    def set_coordinates(self, markers, new_coords, mode='time-varying'):
+        """
+        Designates a new coordinate frame defined by a subset of markers and their desired positions
+        in the new frame. 
+
+        Args:
+        markers: list - the markers which define this frame
+        new_coords: (len(markers), 3) ndarray - the desired coordinates of the designated markers in
+            the new frame
+        mode: string - transform mode (currently only 'time-varying' is supported)
+        """
+        self._coordinates_mode = mode
+        self._desired_coords = new_coords.squeeze()
+        self._desired_idxs = np.array(markers).squeeze()
+        self._last_transform = np.identity(4)
+
+    def get_last_coordinates(self):
+        return self._last_transform
+
+    def transform(self, frames, timestamps):
+        # Compute and apply a coordinate transformation, if any
+        if self._coordinates_mode is not None:
+            if self._coordinates_mode == 'time_varying':
+                # Iterate over each frame
+                trans_points = frames.copy()
+                for i in range(trans_points.shape[2]):
+                    # Find which of the specified markers are visible in this frame
+                    # visible_inds = np.where(~np.isnan(trans_points[self._desired_idxs[coordinate_frame],0,i]))[0]
+                    visible_inds = ~np.isnan(trans_points[self._desired_idxs, :, i]).any(axis=1)
+
+                    # Compute the transformation
+                    orig_points = trans_points[self._desired_idxs[visible_inds], :, i]
+                    desired_points = self._desired_coords[visible_inds]
+                    try:
+                        homog = find_homog_trans(orig_points, desired_points, rot_0=None)[0]
+                        self._last_transform = homog
+                    except ValueError:
+                        # Not enough points visible for tf.transformations to compute the transform
+                        homog = self._last_transform
+
+                    #Apply the transformation to the frame
+                    homog_coords = np.vstack((trans_points[:, :, i].T, np.ones((1, trans_points.shape[0]))))
+                    homog_coords = np.dot(homog, homog_coords)
+                    trans_points[:, :, i] = homog_coords.T[:, 0:3]
+            else:
+                raise TypeError('The specified coordinate transform mode is invalid')
+
+            #Save the transformed points
+            frames = trans_points
+
+        # Return the original frames and timestamps with any transformations applied
+        return frames, timestamps
+
 class MocapStream(object):
     def __init__(self, mocap_source, max_buffer_len=0):
         """The default stream/buffer object to use for reading data from a MocapSource.
@@ -271,11 +332,7 @@ class MocapStream(object):
         self._frame_count = 0
         self._start_time = None
 
-        # Data about the coordinate transformation to apply
-        self._coordinates_mode = None
-        self._desired_coords = None
-        self._desired_idxs = None
-        self._last_transform = np.identity(4)
+        self._transformer = MocapTransformer()
 
         # Register this stream (do this last so it's ready to receive frames from an offline source)
         self._source.register_buffer(self)
@@ -345,38 +402,9 @@ class MocapStream(object):
     def _process_frames(self, frames, timestamps):
         """Apply preprocessing steps to frames and timestamps before returning them.
         """
-        # Compute and apply a coordinate transformation, if any
-        if self._coordinates_mode is not None:
-            if self._coordinates_mode == 'time_varying':
-                # Iterate over each frame
-                trans_points = frames.copy()
-                for i in range(trans_points.shape[2]):
-                    # Find which of the specified markers are visible in this frame
-                    # visible_inds = np.where(~np.isnan(trans_points[self._desired_idxs[coordinate_frame],0,i]))[0]
-                    visible_inds = ~np.isnan(trans_points[self._desired_idxs, :, i]).any(axis=1)
-
-                    # Compute the transformation
-                    orig_points = trans_points[self._desired_idxs[visible_inds], :, i]
-                    desired_points = self._desired_coords[visible_inds]
-                    try:
-                        homog = find_homog_trans(orig_points, desired_points, rot_0=None)[0]
-                        self._last_transform = homog
-                    except ValueError:
-                        # Not enough points visible for tf.transformations to compute the transform
-                        homog = self._last_transform
-
-                    #Apply the transformation to the frame
-                    homog_coords = np.vstack((trans_points[:, :, i].T, np.ones((1, trans_points.shape[0]))))
-                    homog_coords = np.dot(homog, homog_coords)
-                    trans_points[:, :, i] = homog_coords.T[:, 0:3]
-            else:
-                raise TypeError('The specified coordinate transform mode is invalid')
-
-            #Save the transformed points
-            frames = trans_points
-
-        # Return the original frames and timestamps with any transformations applied
+        frames, timestamps = self._transformer.transform(frames, timestamps)
         return frames, timestamps
+        
 
     def read_dict(self, name_dict, block=True):
         """Returns a dict mapping marker names to numpy arrays of marker coordinates.
@@ -414,23 +442,7 @@ class MocapStream(object):
             return self._frame_count / (time.time() - self._start_time)
 
     def set_coordinates(self, markers, new_coords, mode='time-varying'):
-        """
-        Designates a new coordinate frame defined by a subset of markers and their desired positions
-        in the new frame. 
-
-        Args:
-        markers: list - the markers which define this frame
-        new_coords: (len(markers), 3) ndarray - the desired coordinates of the designated markers in
-            the new frame
-        mode: string - transform mode (currently only 'time-varying' is supported)
-        """
-        self._coordinates_mode = mode
-        self._desired_coords = new_coords.squeeze()
-        self._desired_idxs = np.array(markers).squeeze()
-        self._last_transform = np.identity(4)
-
-    def get_last_coordinates(self):
-        return self._last_transform
+        self._transformer.set_coordinates(markers, new_coords, mode)
 
     def close(self):
         self._source.unregister_buffer(self)
