@@ -31,6 +31,7 @@ try:
 except(ImportError):
     pass
 
+
 class MocapSource(object):
     """Base class for online and offline mocap sources.
 
@@ -143,6 +144,7 @@ class OnlineMocapSource(MocapSource):
         """
         return MocapStream(self, max_buffer_len=self.DEFAULT_BUFFER_LEN)
 
+
 class OfflineMocapSource(MocapSource):
     __metaclass__=ABCMeta
 
@@ -248,6 +250,9 @@ class OfflineMocapSource(MocapSource):
         """
         return MocapStream(self, max_buffer_len=len(self)+1)
 
+    def __len__(self):
+        return self._frames.shape[2]
+
 
 class MocapTransformer(object):
     def __init__(self):
@@ -257,7 +262,7 @@ class MocapTransformer(object):
         self._desired_idxs = None
         self._last_transform = np.identity(4)
 
-    def set_coordinates(self, markers, new_coords, mode='time-varying'):
+    def set_coordinates(self, markers, new_coords, mode='time_varying'):
         """
         Designates a new coordinate frame defined by a subset of markers and their desired positions
         in the new frame. 
@@ -266,7 +271,7 @@ class MocapTransformer(object):
         markers: list - the markers which define this frame
         new_coords: (len(markers), 3) ndarray - the desired coordinates of the designated markers in
             the new frame
-        mode: string - transform mode (currently only 'time-varying' is supported)
+        mode: string - transform mode (currently only 'time_varying' is supported)
         """
         self._coordinates_mode = mode
         self._desired_coords = new_coords.squeeze()
@@ -276,7 +281,7 @@ class MocapTransformer(object):
     def get_last_coordinates(self):
         return self._last_transform
 
-    def transform(self, frames, timestamps):
+    def transform(self, frames):
         # Compute and apply a coordinate transformation, if any
         if self._coordinates_mode is not None:
             if self._coordinates_mode == 'time_varying':
@@ -302,13 +307,14 @@ class MocapTransformer(object):
                     homog_coords = np.dot(homog, homog_coords)
                     trans_points[:, :, i] = homog_coords.T[:, 0:3]
             else:
-                raise TypeError('The specified coordinate transform mode is invalid')
+                raise TypeError('The specified coordinate transform mode (%s) is invalid' % self._coordinates_mode)
 
             #Save the transformed points
             frames = trans_points
 
         # Return the original frames and timestamps with any transformations applied
-        return frames, timestamps
+        return frames
+
 
 class MocapStream(object):
     def __init__(self, mocap_source, max_buffer_len=0):
@@ -396,14 +402,14 @@ class MocapStream(object):
         when the end of the stream is reached.
         """
         frames, timestamps = self._get_frames(length, block)
-        frames, timestamps = self._process_frames(frames, timestamps)
+        frames = self._process_frames(frames)
         return frames, timestamps
 
-    def _process_frames(self, frames, timestamps):
+    def _process_frames(self, frames):
         """Apply preprocessing steps to frames and timestamps before returning them.
         """
-        frames, timestamps = self._transformer.transform(frames, timestamps)
-        return frames, timestamps
+        frames = self._transformer.transform(frames)
+        return frames
         
 
     def read_dict(self, name_dict, block=True):
@@ -441,7 +447,7 @@ class MocapStream(object):
         else:
             return self._frame_count / (time.time() - self._start_time)
 
-    def set_coordinates(self, markers, new_coords, mode='time-varying'):
+    def set_coordinates(self, markers, new_coords, mode='time_varying'):
         self._transformer.set_coordinates(markers, new_coords, mode)
 
     def get_last_coordinates(self):
