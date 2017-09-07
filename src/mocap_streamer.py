@@ -44,7 +44,7 @@ def main():
             #Construct and publish the message
             message = sensor_msgs.PointCloud()
             message.header = std_msgs.Header()
-            message.header.frame_id = 'mocap'
+            message.header.frame_id = 'world' #'mocap'
             #message.header.time = rospy.get_rostime()
             message.points = []
             for i in range(frame.shape[0]):
