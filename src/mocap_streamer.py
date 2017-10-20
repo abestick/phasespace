@@ -27,7 +27,8 @@ def main():
     rospy.init_node('mocap_streamer')
 
     #Load the mocap stream
-    with load_mocap.PhasespaceMocapSource('192.168.1.120', num_points=32, 
+    ip = rospy.get_param('phasespace/ip', '192.168.1.120')
+    with load_mocap.PhasespaceMocapSource(ip, num_points=32, 
                                      framerate=50).get_stream() as mocap:
 
         #Play the points from the mocap stream
