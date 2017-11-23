@@ -1,0 +1,7 @@
+<launch>
+	<arg name="name"/>
+    <node name="rviz" pkg="rviz" type="rviz" args="-d $(find phasespace)/resources/mocap.rviz" />
+    <node name="mocap_array_streamer" pkg="phasespace" type="mocap_array_streamer.py" cwd="node" args="$(env HOME)/experiment/$(arg name)/$(arg name)_rec.npz" output="screen"/>
+	<node name="track_kinmodel" pkg="kinmodel" type="track_kinmodel.py" args="$(env HOME)/experiment/$(arg name)/$(arg name).json" />
+    <node name="rqt_plot" pkg="rqt_plot" type="rqt_plot" args="/kinmodel_state/position[0] /kinmodel_state/position[1] /kinmodel_state/position[2] /kinmodel_state/position[3]" />
+</launch>

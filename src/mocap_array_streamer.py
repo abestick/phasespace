@@ -41,7 +41,7 @@ def stream(mocap_data, bag=None):
     root = ForwardRoot([measurement_node])
 
     # Create the system
-    system = ForwardSystem(root)
+    system = ForwardSystem(root, FRAMERATE)
 
     measurement_node.add_raw_output(PointCloudPublisher('mocap_point_cloud', 'world', bag, system.get_time),
                                     'PointCloud Publisher', None, 'states')

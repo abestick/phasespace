@@ -1,0 +1,5 @@
+<launch>
+	<arg name="name"/>
+	<node name="mocap_array_streamer" pkg="phasespace" type="mocap_array_streamer.py" cwd="node" args="$(env HOME)/experiment/$(arg name)/$(arg name)_rec.npz" output="screen"/>
+	<node name="rviz" pkg="rviz" type="rviz" args="-d $(find phasespace)/resources/mocap.rviz" />
+</launch>
